@@ -6,6 +6,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
+from ..services.subprocess_utils import hidden_subprocess_kwargs
+
 
 class CommandWorker(QThread):
     log = Signal(str)
@@ -31,6 +33,7 @@ class CommandWorker(QThread):
                     encoding="utf-8",
                     errors="replace",
                     shell=False,
+                    **hidden_subprocess_kwargs(),
                 )
             assert self._process.stdout is not None
             for line in self._process.stdout:

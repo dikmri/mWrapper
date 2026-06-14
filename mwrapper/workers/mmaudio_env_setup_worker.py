@@ -13,6 +13,7 @@ from ..services.package_installer import (
     PyTorchInstallSpec,
     select_pytorch_install_spec,
 )
+from ..services.subprocess_utils import hidden_subprocess_kwargs
 
 
 class MMAudioEnvSetupWorker(QThread):
@@ -175,6 +176,7 @@ class MMAudioEnvSetupWorker(QThread):
                 encoding="utf-8",
                 errors="replace",
                 shell=False,
+                **hidden_subprocess_kwargs(),
             )
         assert self._process.stdout is not None
         for line in self._process.stdout:

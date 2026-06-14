@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass, field
 
+from .subprocess_utils import hidden_subprocess_kwargs
+
 
 @dataclass(frozen=True, slots=True)
 class HardwareInfo:
@@ -30,6 +32,7 @@ def inspect_hardware(timeout_seconds: int = 10) -> HardwareInfo:
             timeout=timeout_seconds,
             check=False,
             shell=False,
+            **hidden_subprocess_kwargs(),
         )
     except Exception as exc:
         return HardwareInfo(error=str(exc))

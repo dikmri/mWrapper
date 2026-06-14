@@ -8,6 +8,8 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
+from .subprocess_utils import hidden_subprocess_kwargs
+
 
 class FFprobeError(RuntimeError):
     pass
@@ -81,6 +83,7 @@ def probe_video(path: Path, ffprobe_path: str = "ffprobe") -> VideoInfo:
             encoding="utf-8",
             errors="replace",
             check=False,
+            **hidden_subprocess_kwargs(),
         )
     except OSError as exc:
         raise FFprobeError(f"Failed to start ffprobe: {exc}") from exc

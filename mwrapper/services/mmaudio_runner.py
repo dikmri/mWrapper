@@ -17,6 +17,7 @@ from .mmaudio_dependencies import (
 from .mmaudio_demo_patch import patch_mmaudio_demo
 from .output_manager import detect_newest_output, snapshot_media_files
 from .process_log_guard import ProcessLogGuard, diagnose_fatal_log_line
+from .subprocess_utils import hidden_subprocess_kwargs
 
 
 LogCallback = Callable[[str], None]
@@ -116,6 +117,7 @@ class MMAudioRunner:
                         encoding="utf-8",
                         errors="replace",
                         shell=False,
+                        **hidden_subprocess_kwargs(),
                     )
 
                 assert self._process.stdout is not None

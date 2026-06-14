@@ -6,6 +6,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .subprocess_utils import hidden_subprocess_kwargs
+
 
 @dataclass(frozen=True, slots=True)
 class PythonCandidate:
@@ -28,6 +30,7 @@ def list_python_candidates() -> list[PythonCandidate]:
             timeout=10,
             check=False,
             shell=False,
+            **hidden_subprocess_kwargs(),
         )
     except Exception:
         completed = None

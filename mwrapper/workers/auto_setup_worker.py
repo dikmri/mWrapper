@@ -11,6 +11,7 @@ from ..services.hardware import format_hardware_info, inspect_hardware
 from ..services.mmaudio_downloader import download_mmaudio_repository
 from ..services.model_assets import download_nsfw_mmaudio_model
 from ..services.package_installer import PyTorchInstallSpec, select_pytorch_install_spec
+from ..services.subprocess_utils import hidden_subprocess_kwargs
 from .mmaudio_env_setup_worker import MMAudioEnvSetupWorker
 
 
@@ -39,6 +40,7 @@ class AutoSetupWorker(QThread):
     def run(self) -> None:
         venv_python = self.venv_dir / "Scripts" / "python.exe"
         try:
+            self.log.emit("セットアップ: ハードウェア情報を確認しています。")
             hardware = inspect_hardware()
             self.log.emit(format_hardware_info(hardware))
             pytorch_spec = select_pytorch_install_spec(hardware)
@@ -46,13 +48,16 @@ class AutoSetupWorker(QThread):
                 f"PyTorch構成選択: {pytorch_spec.label} / index: {pytorch_spec.index_url}"
             )
 
+            self.log.emit("セットアップ: MMAudio本体を確認しています。")
             demo_path = download_mmaudio_repository(self.tools_dir, self.log.emit)
             mmaudio_dir = demo_path.parent
+            self.log.emit("セットアップ: NSFW_MMaudioモデルを確認しています。")
             download_nsfw_mmaudio_model(mmaudio_dir, self.log.emit)
 
             if self.rebuild_venv:
                 if self.base_python is None:
                     raise RuntimeError("Python 3.10-3.12 が見つかりませんでした。")
+                self.log.emit("セットアップ: MMAudio専用Python環境を構築しています。")
                 return_code = self._setup_venv(self.base_python, mmaudio_dir, pytorch_spec)
                 if return_code != 0:
                     self.finished_auto_setup.emit(return_code, None, None)
@@ -60,6 +65,7 @@ class AutoSetupWorker(QThread):
             elif not venv_python.exists():
                 raise RuntimeError(f"専用venvのPythonが見つかりません: {venv_python}")
 
+            self.log.emit("セットアップ: 完了しました。")
             self.finished_auto_setup.emit(0, demo_path, venv_python)
         except Exception as exc:
             self.log.emit(f"自動セットアップエラー: {exc}")
@@ -116,6 +122,7 @@ class AutoSetupWorker(QThread):
                 encoding="utf-8",
                 errors="replace",
                 shell=False,
+                **hidden_subprocess_kwargs(),
             )
         assert self._process.stdout is not None
         for line in self._process.stdout:

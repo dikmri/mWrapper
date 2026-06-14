@@ -100,8 +100,9 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_config_to_ui()
+        self._append_log("mWrapperを起動しました。初回セットアップ状態を確認します。")
         self._update_button_state()
-        QTimer.singleShot(0, self._ensure_initial_environment)
+        QTimer.singleShot(300, self._ensure_initial_environment)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -326,13 +327,16 @@ class MainWindow(QMainWindow):
         if self.env_setup_worker is not None and self.env_setup_worker.isRunning():
             return
 
+        self._append_log("自動セットアップ確認: セットアップ先と必要ファイルを確認しています。")
         setup_paths = setup_paths_for_root(Path(self.config.paths.setup_dir))
         readiness = inspect_setup_readiness(setup_paths)
         if not readiness.ready and not self.config.paths.setup_dir_confirmed:
+            self._append_log("自動セットアップ確認: 初回セットアップ先の選択が必要です。")
             selected = self._choose_setup_root_for_initial_setup(setup_paths.root)
             if selected is None:
                 self._append_log("初回自動セットアップをキャンセルしました。")
                 return
+            self._append_log(f"自動セットアップ確認: セットアップ先を設定しました: {selected}")
             self._apply_setup_root(selected)
             setup_paths = setup_paths_for_root(selected)
             readiness = inspect_setup_readiness(setup_paths)
@@ -350,6 +354,7 @@ class MainWindow(QMainWindow):
 
         if demo_ready:
             try:
+                self._append_log("自動セットアップ確認: MMAudio demo.py の互換パッチを確認しています。")
                 patch_mmaudio_demo(demo_path)
             except Exception as exc:
                 self._append_log(f"MMAudio demo.py の互換パッチ確認に失敗しました: {exc}")
@@ -379,6 +384,9 @@ class MainWindow(QMainWindow):
 
         self.log_view.clear()
         self._append_log("初回自動セットアップを開始します。")
+        if base_python is not None:
+            self._append_log(f"セットアップ: 使用するPython: {base_python.path}")
+        self._append_log(f"セットアップ: 構築先: {setup_paths.root}")
         self._start_auto_setup(setup_paths, base_python.path if base_python else None, not venv_ready)
 
     def reset_environment(self) -> None:

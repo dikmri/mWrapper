@@ -5,6 +5,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .subprocess_utils import hidden_subprocess_kwargs
+
 
 @dataclass(slots=True)
 class MMAudioDependencyInfo:
@@ -61,6 +63,7 @@ print(json.dumps(data, ensure_ascii=False))
             timeout=timeout_seconds,
             check=False,
             shell=False,
+            **hidden_subprocess_kwargs(),
         )
     except Exception as exc:
         return MMAudioDependencyInfo(
