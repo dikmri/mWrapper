@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QApplication,
 )
 
 from ..constants import APP_ICON_PATH, APP_NAME, APP_VERSION, SUPPORTED_VIDEO_EXTENSIONS
@@ -70,6 +71,7 @@ from ..workers.command_worker import CommandWorker
 from ..workers.generate_worker import GenerateWorker
 from ..workers.mmaudio_env_setup_worker import MMAudioEnvSetupWorker
 from ..workers.mmaudio_download_worker import MMAudioDownloadWorker
+from ..workers.update_worker import UpdateWorker, UpdateWorkerResult
 from .preview_player import PreviewPlayer
 
 
@@ -97,12 +99,13 @@ class MainWindow(QMainWindow):
         self.command_worker: CommandWorker | None = None
         self.env_setup_worker: MMAudioEnvSetupWorker | None = None
         self.auto_setup_worker: AutoSetupWorker | None = None
+        self.update_worker: UpdateWorker | None = None
 
         self._build_ui()
         self._load_config_to_ui()
-        self._append_log("mWrapperを起動しました。初回セットアップ状態を確認します。")
+        self._append_log("mWrapperを起動しました。自動アップデートを確認します。")
         self._update_button_state()
-        QTimer.singleShot(300, self._ensure_initial_environment)
+        QTimer.singleShot(300, self._check_for_updates)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -388,6 +391,17 @@ class MainWindow(QMainWindow):
             self._append_log(f"セットアップ: 使用するPython: {base_python.path}")
         self._append_log(f"セットアップ: 構築先: {setup_paths.root}")
         self._start_auto_setup(setup_paths, base_python.path if base_python else None, not venv_ready)
+
+    def _check_for_updates(self) -> None:
+        if self.update_worker is not None and self.update_worker.isRunning():
+            return
+        self.update_worker = UpdateWorker(self)
+        self.update_worker.log.connect(self._append_log)
+        self.update_worker.progress.connect(self._update_download_progress)
+        self.update_worker.finished_update.connect(self._auto_update_finished)
+        self.update_worker.finished.connect(lambda: self._set_updating(False))
+        self._set_updating(True)
+        self.update_worker.start()
 
     def reset_environment(self) -> None:
         if self._is_busy():
@@ -747,6 +761,7 @@ class MainWindow(QMainWindow):
             or (self.command_worker is not None and self.command_worker.isRunning())
             or (self.env_setup_worker is not None and self.env_setup_worker.isRunning())
             or (self.auto_setup_worker is not None and self.auto_setup_worker.isRunning())
+            or (self.update_worker is not None and self.update_worker.isRunning())
         )
 
     def save_result(self) -> None:
@@ -818,6 +833,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Ready")
         self._update_button_state()
 
+    def _set_updating(self, updating: bool) -> None:
+        if updating:
+            self.progress.setRange(0, 0)
+            self.statusBar().showMessage("Checking for updates...")
+        else:
+            self.progress.setRange(0, 1)
+            self.progress.setValue(0)
+            self.statusBar().showMessage("Ready")
+        self._update_button_state()
+
+    def _update_download_progress(self, downloaded: int, total: int) -> None:
+        if total <= 0:
+            self.progress.setRange(0, 0)
+            return
+        percent = min(100, max(0, int(downloaded * 100 / total)))
+        self.progress.setRange(0, 100)
+        self.progress.setValue(percent)
+        self.statusBar().showMessage(f"Downloading update... {percent}%")
+
     def _update_button_state(self, running: bool | None = None) -> None:
         if running is None:
             running = self.worker is not None and self.worker.isRunning()
@@ -825,7 +859,8 @@ class MainWindow(QMainWindow):
         installing = self.command_worker is not None and self.command_worker.isRunning()
         setting_up_env = self.env_setup_worker is not None and self.env_setup_worker.isRunning()
         auto_setting_up = self.auto_setup_worker is not None and self.auto_setup_worker.isRunning()
-        busy = running or downloading or installing or setting_up_env or auto_setting_up
+        updating = self.update_worker is not None and self.update_worker.isRunning()
+        busy = running or downloading or installing or setting_up_env or auto_setting_up or updating
         has_video = self.current_video_path is not None
         has_prompt = bool(self.prompt_edit.toPlainText().strip())
         has_result = self.generated_video_path is not None
@@ -1005,6 +1040,31 @@ class MainWindow(QMainWindow):
             "初回自動セットアップに失敗しました。ログを確認してください。",
         )
 
+    def _auto_update_finished(self, result: object) -> None:
+        update_result = result if isinstance(result, UpdateWorkerResult) else None
+        if update_result is None:
+            self._append_log("自動アップデート確認: 結果を取得できませんでした。現在のバージョンで起動します。")
+            self._ensure_initial_environment()
+            return
+
+        if update_result.should_quit:
+            self._append_log("自動アップデート: 更新適用のため mWrapper を終了します。")
+            app = QApplication.instance()
+            if app is not None:
+                QTimer.singleShot(500, app.quit)
+            return
+
+        if update_result.error:
+            self._append_log(
+                "自動アップデート確認: アップデートに失敗したため、現在のバージョンで起動します。"
+            )
+            self._append_log(f"自動アップデートエラー: {update_result.error}")
+        elif update_result.skipped:
+            self._append_log("自動アップデート確認: スキップしました。")
+        else:
+            self._append_log("自動アップデート確認: 現在のバージョンが最新版です。")
+        self._ensure_initial_environment()
+
     def _mmaudio_working_dir_or_none(self) -> Path | None:
         raw = self.demo_script_edit.text().strip()
         if not raw:
@@ -1035,6 +1095,14 @@ class MainWindow(QMainWindow):
                 self,
                 "初回自動セットアップ中",
                 "初回自動セットアップ中です。完了してから終了してください。",
+            )
+            event.ignore()
+            return
+        if self.update_worker is not None and self.update_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "自動アップデート中",
+                "自動アップデート中です。完了してから終了してください。",
             )
             event.ignore()
             return

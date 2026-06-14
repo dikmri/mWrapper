@@ -43,6 +43,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 
 FFmpeg は別途必要です。`ffmpeg` と `ffprobe` が PATH から実行できる状態にしてください。
 
+## 自動アップデート
+
+リリース版の `mWrapper.exe` は、起動直後に GitHub Releases の最新版を確認します。
+
+最新版がない場合はそのまま起動します。最新版がある場合は、ログに進捗を表示しながら Windows 版 zip をダウンロードし、mWrapper を終了して更新を適用したあと自動で再起動します。
+
+自動アップデートを無効にしたい場合は、起動前に `MWRAPPER_DISABLE_AUTO_UPDATE=1` を指定してください。
+
+```powershell
+$env:MWRAPPER_DISABLE_AUTO_UPDATE = "1"
+```
+
 ## 初回セットアップ
 
 初回起動時、mWrapper はセットアップ先フォルダを選択します。
@@ -121,8 +133,8 @@ Windows exe zip は次で作成できます。
 `v*` タグを GitHub に push すると、GitHub Actions がテスト、Python package、Windows exe zip のビルド、GitHub Release の作成を行います。
 
 ```powershell
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
 
 Release には次のファイルが添付されます。
