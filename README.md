@@ -1,136 +1,131 @@
 # mWrapper
 
-mWrapper is a beginner-friendly PySide6 GUI wrapper for MMAudio-based video-to-audio generation.
+mWrapper は、MMAudio 系モデルを使って動画に音声を生成して付与するための Windows 向け GUI ラッパーです。
 
-This repository currently implements the v0.1 MVP from `mWrapper_spec.md`:
+動画をウィンドウへドラッグアンドドロップし、ポジティブプロンプトと必要に応じてネガティブプロンプトを入力して生成できます。初回起動時にはセットアップ先フォルダを選ぶだけで、MMAudio、NSFW_MMaudio、専用 venv、CUDA 版 PyTorch の導入を自動で行います。
 
-- Drag and drop video input
-- ffprobe-based video information display
-- Positive and negative prompt input
-- MMAudio / NSFW_MMaudio model switching
-- Random seed by default, with optional fixed seed
-- MMAudio `demo.py` CLI execution
-- Live stdout/stderr log display
-- Generated mp4 detection
-- Built-in video preview
-- Save as `<original_filename>_mmaudio.mp4`, with numbered names on conflict
-- First-run automatic setup for MMAudio, NSFW_MMaudio weights, the dedicated venv, and PyTorch
+## 注意
 
-## Important Safety Notice
+このツールは、合法で同意済みの成人向け素材のみを対象にしてください。
 
-Use only with legal, consenting adult content.
+次の用途には使用しないでください。
 
-Prohibited uses:
+- 未成年、または未成年に見える人物を含む性的コンテンツ
+- 非同意、盗撮、流出、リベンジポルノ
+- 実在人物への無断の性的加工
+- 違法、権利侵害、プライバシー侵害にあたる素材や用途
 
-- minors or minor-looking sexual content
-- non-consensual material
-- voyeuristic or leaked material
-- revenge pornography
-- unauthorized sexual manipulation of real people
-- illegal or rights-infringing content
+モデル、MMAudio、FFmpeg、PyTorch などの第三者コンポーネントは、それぞれのライセンスと利用条件に従ってください。
 
-## Installation
+## インストール
+
+Python 3.10 から 3.12 と FFmpeg が必要です。FFmpeg は `ffmpeg` と `ffprobe` が PATH から実行できる状態にしてください。
+
+コマンドだけで入れる場合は、PowerShell で次を実行してください。
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+py -m pip install --user git+https://github.com/dikmri/mWrapper.git
+py -m mwrapper
 ```
 
-Install FFmpeg separately and make sure `ffmpeg` and `ffprobe` are available on `PATH`.
-
-## Running
+グローバル環境に入れたくない場合は `pipx` でも起動できます。
 
 ```powershell
-python -m mwrapper
+py -m pip install --user pipx
+py -m pipx ensurepath
+py -m pipx install git+https://github.com/dikmri/mWrapper.git
 ```
 
-On first launch, mWrapper asks where to build its dedicated setup. It estimates the missing setup size and rejects locations whose drive does not have enough free space. If MMAudio, NSFW_MMaudio weights, or the dedicated venv are missing, setup then starts automatically in the background.
-
-In normal use:
-
-1. Drop a video file.
-2. Choose `NSFW_MMaudio` or `MMAudio`.
-3. Enter a positive prompt and, optionally, a negative prompt.
-4. Leave `seed固定` off for a new random result each run, or turn it on to reuse the displayed seed.
-5. Click Generate.
-6. Preview the result and save it.
-
-The main window accepts video drag and drop anywhere. Environment controls are intentionally hidden from normal use; use `初期化` only when the dedicated setup is broken or you want to rebuild it in another folder. Prompt text is saved on exit and restored on the next launch.
-
-## MMAudio Setup
-
-mWrapper does not include MMAudio, model weights, FFmpeg binaries, or third-party model files. Configure these separately according to their own instructions and licenses.
-
-The `MMAudio取得` button downloads the official MMAudio source ZIP from GitHub into the local mWrapper tools directory and automatically fills the `demo.py` path. First-run setup also downloads the NSFW_MMaudio checkpoint to `weights/nsfw_gold_8.5k_final.pth` and patches MMAudio's `demo.py` so it can be selected as the `nsfw_mmaudio` variant.
-
-## CUDA / GPU Setup
-
-MMAudio uses GPU only when the Python environment that runs `demo.py` has a CUDA-enabled PyTorch build. If that environment has a CPU-only build such as `torch ... +cpu`, MMAudio will run on CPU even if the machine has an NVIDIA GPU.
-
-Use `CUDA確認` in the app to inspect the selected `MMAudio Python`. The app defaults to `CUDA必須`, so generation is blocked before launch when CUDA is unavailable instead of silently running on CPU.
-
-First-run setup creates a dedicated MMAudio virtual environment with Python 3.10-3.12, PyTorch, and MMAudio dependencies. It checks NVIDIA hardware with `nvidia-smi` and selects the PyTorch wheel index automatically. For NVIDIA GPUs, mWrapper defaults to CUDA 12.8, matching PyTorch's current Windows pip selector and avoiding older wheel/GPU architecture mismatches. This avoids dependency conflicts in a global Python 3.13 environment and keeps MMAudio packages out of other Python environments.
-
-mWrapper does not build a full ComfyUI environment. The large pieces are the CUDA PyTorch wheel set, MMAudio/NSFW_MMaudio model weights, and runtime model caches such as Hugging Face/OpenCLIP assets. To reduce C: drive pressure, setup uses no-cache pip/uv installs and routes runtime Hugging Face/Torch caches under the selected setup folder.
-
-When `uv` is available, `専用venv作成` uses `uv venv --clear --seed` and `uv pip install --python <venv_python>`. If a dedicated venv already exists, it is rebuilt so stale CPU-only or older CUDA PyTorch installs are removed. If `uv` is not installed, it falls back to Python's built-in `venv --clear` plus pip inside that venv.
-
-The `CUDA PyTorch導入` button modifies the selected `MMAudio Python` environment directly. Prefer `専用venv作成` unless you intentionally want to change that selected environment. When `uv` is available, it runs without requiring pip inside the selected environment:
+`pipx ensurepath` 後は、新しい PowerShell を開いて起動してください。
 
 ```powershell
-uv pip install --python <MMAudio Python> --reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+mwrapper
 ```
 
-Without `uv`, it falls back to:
+開発用にリポジトリを取得して動かす場合は次の通りです。
 
 ```powershell
-python -m pip install --upgrade --force-reinstall torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+git clone https://github.com/dikmri/mWrapper.git
+cd mWrapper
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m mwrapper
 ```
 
-MMAudio's README recommends installing PyTorch first and choosing a CUDA build that matches the GPU/driver. PyTorch's official installer currently lists CUDA 12.8 for pip installs, which is the default used by mWrapper. See the official PyTorch installation selector if CUDA 12.8 is not suitable for your environment: https://pytorch.org/get-started/locally/
+## 初回セットアップ
 
-`CUDA確認` also checks the GPU compute capability against the architectures supported by the selected PyTorch wheel. For example, RTX 50 series GPUs report `sm_120`; older CUDA 11.8 wheels may report CUDA as available but still fail at runtime because they only support older architectures.
+初回起動時、mWrapper はセットアップ先フォルダを選択します。
 
-## MMAudio Dependency Repair
+選択したフォルダには次のものを配置します。
 
-If generation fails with an error like:
+- MMAudio 本体
+- NSFW_MMaudio の重み
+- MMAudio 専用 venv
+- CUDA 版 PyTorch
+- Hugging Face などの実行時キャッシュ
+
+必要容量を見積もり、空き容量が足りないドライブは選択できないようにしています。環境にもよりますが、初回構築にはおおむね 20 GB 前後の空き容量が必要です。
+
+セットアップ済みの環境は再利用されます。起動するたびに毎回インストールし直すことはありません。環境が壊れた場合や、別のドライブへ作り直したい場合だけ、画面上の `初期化` ボタンを押してください。
+
+## 使い方
+
+1. mWrapper を起動します。
+2. 動画ファイルをウィンドウ内へドラッグアンドドロップします。
+3. `MMAudio` または `NSFW_MMaudio` を選びます。
+4. ポジティブプロンプトを入力します。
+5. 必要ならネガティブプロンプトを入力します。
+6. 毎回違う結果にしたい場合は `seed固定` をオフにします。
+7. 同じ seed を再利用したい場合は `seed固定` をオンにします。
+8. `生成` を押します。
+9. プレビューで確認し、必要なら保存します。
+
+プロンプトの内容は終了時に保存され、次回起動時に復元されます。
+
+生成 duration はドラッグアンドドロップした動画の長さに合わせて自動調整されます。
+
+## GPU / CUDA
+
+NVIDIA GPU がある場合、初回セットアップ時に `nvidia-smi` でハードウェア情報を確認し、PyTorch の CUDA wheel を自動選択します。RTX 50 系など新しい GPU では古い CUDA 11.8 wheel が実行時に失敗することがあるため、mWrapper は CUDA 12.8 の PyTorch を優先します。
+
+NVIDIA GPU がない場合は CPU 構成を選びます。ただし MMAudio の生成は重いため、実用上は CUDA 対応 GPU を推奨します。
+
+## 出力
+
+生成結果は MMAudio の出力から検出し、保存時に次の形式でコピーします。
 
 ```text
-ImportError: Numba needs NumPy 2.3 or less. Got NumPy 2.4.
+<元動画名>_mmaudio.mp4
 ```
 
-the selected Python environment has an incompatible NumPy/numba combination. Use `専用venv作成` first. `MMAudio依存修復` modifies the selected `MMAudio Python` environment directly and should only be used intentionally.
+同名ファイルがある場合は番号を付けて上書きを避けます。
 
-When `uv` is available, `MMAudio依存修復` runs:
+## リリース
+
+`v*` タグを GitHub に push すると、GitHub Actions がテスト、wheel/sdist のビルド、GitHub Release の作成を行います。
 
 ```powershell
-uv pip install --python <MMAudio Python> --upgrade -e . "numpy<2.1,>=1.21" "soundfile>=0.12"
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-from the MMAudio repository directory, matching MMAudio's own `numpy >= 1.21, <2.1` requirement. Without `uv`, it falls back to `python -m pip install --upgrade -e . "numpy<2.1,>=1.21" "soundfile>=0.12"`.
+## 開発
 
-On Windows, recent `torchaudio.save()` versions use TorchCodec internally. TorchCodec requires compatible FFmpeg shared DLLs, not just an `ffmpeg.exe` command on PATH. mWrapper avoids that fragile path by patching MMAudio's `demo.py` to save audio with `soundfile` before launching generation.
-
-The v0.1 runner calls MMAudio in this shape:
+テストは次で実行できます。
 
 ```powershell
-python demo.py --duration=8 --video="<input_video>" --prompt="<english_prompt>"
+python -m pytest
 ```
 
-Current mWrapper calls MMAudio with explicit variant and seed values:
+一時ファイルや Python キャッシュを掃除する場合は次を使えます。
 
 ```powershell
-python demo.py --variant=nsfw_mmaudio --duration=8 --video="<input_video>" --prompt="<positive_prompt>" --negative_prompt="<negative_prompt>" --seed=123
+python scripts/clean_temp.py
 ```
 
-If your local MMAudio checkout uses different arguments, update the runner configuration or code before generation.
+## ライセンス
 
-## License
+mWrapper 本体は MIT License です。
 
-mWrapper itself is licensed under the MIT License.
-
-This repository does not include MMAudio model weights, NSFW_MMaudio model weights, FFmpeg binaries, or third-party model files. These components are downloaded or configured separately by the user and are governed by their respective licenses.
-
-Users are responsible for ensuring that their use of third-party models and tools complies with all applicable licenses and laws.
+このリポジトリには MMAudio のモデル重み、NSFW_MMaudio のモデル重み、FFmpeg バイナリ、生成済みメディアは同梱していません。第三者コンポーネントの詳細は [ThirdPartyNotices.md](ThirdPartyNotices.md) を確認してください。

@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run tests
+        run: python -m pytest
+
+      - name: Build package
+        run: python -m build
+
+      - name: Write release notes
+        shell: pwsh
+        run: |
+          @"
+          # mWrapper $env:GITHUB_REF_NAME
+
+          このリリースには Python wheel と source distribution を添付しています。
+
+          ## インストール
+
+          ```powershell
+          py -m pip install --user git+https://github.com/dikmri/mWrapper.git@$env:GITHUB_REF_NAME
+          py -m mwrapper
+          ```
+          "@ | Set-Content -LiteralPath release_notes.md -Encoding UTF8
+
+      - name: Create GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem -LiteralPath dist | ForEach-Object { $_.FullName }
+          gh release create "${{ github.ref_name }}" $files --title "mWrapper ${{ github.ref_name }}" --notes-file release_notes.md
