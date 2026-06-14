@@ -43,7 +43,7 @@ jobs:
           $notes = @(
             "# mWrapper $env:GITHUB_REF_NAME"
             ""
-            "このリリースには Python wheel と source distribution を添付しています。"
+            "このリリースには Windows exe zip、Python wheel、source distribution を添付しています。"
             ""
             "## インストール"
             ""
