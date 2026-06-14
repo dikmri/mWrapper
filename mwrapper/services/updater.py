@@ -139,8 +139,9 @@ def launch_update_replacer(
     wait_pid: int,
     temp_root: Path,
 ) -> None:
+    temp_root.mkdir(parents=True, exist_ok=True)
     script_path = temp_root / "apply_update.ps1"
-    log_path = install_dir.parent / "update.log"
+    log_path = install_dir / "update.log"
     script_path.write_text(_updater_script(), encoding="utf-8")
 
     command = [
@@ -165,6 +166,7 @@ def launch_update_replacer(
     ]
     subprocess.Popen(
         command,
+        cwd=str(temp_root),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -203,14 +205,32 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Ensure-Directory {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -ItemType Directory -Force -LiteralPath $Path | Out-Null
+    }
+}
+
 function Write-UpdateLog {
     param([string]$Message)
-    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-    Add-Content -LiteralPath $LogPath -Value "[$timestamp] $Message" -Encoding UTF8
+    try {
+        Ensure-Directory (Split-Path -Parent $LogPath)
+        $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+        Add-Content -LiteralPath $LogPath -Value "[$timestamp] $Message" -Encoding UTF8
+    }
+    catch {
+    }
 }
 
 try {
-    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath) | Out-Null
+    Ensure-Directory $TempRoot
+    Set-Location -LiteralPath $TempRoot
+    Ensure-Directory $InstallDir
+
     Write-UpdateLog "Waiting for process $WaitPid to exit."
     $process = Get-Process -Id $WaitPid -ErrorAction SilentlyContinue
     if ($process) {
@@ -231,16 +251,27 @@ try {
         throw "$ExeName was not found in update archive."
     }
     $sourceDir = $sourceExe.Directory.FullName
-    $backupPath = "$InstallDir.backup-$(Get-Date -Format yyyyMMddHHmmss)"
-
-    Write-UpdateLog "Replacing $InstallDir"
-    if (Test-Path -LiteralPath $InstallDir) {
-        Move-Item -LiteralPath $InstallDir -Destination $backupPath -Force
+    $backupPath = Join-Path $TempRoot "backup"
+    if (Test-Path -LiteralPath $backupPath) {
+        Remove-Item -LiteralPath $backupPath -Recurse -Force
     }
+    New-Item -ItemType Directory -Force -Path $backupPath | Out-Null
+    $sourceItems = @(Get-ChildItem -LiteralPath $sourceDir)
+
+    Write-UpdateLog "Replacing app files in $InstallDir"
 
     try {
-        New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-        Get-ChildItem -LiteralPath $sourceDir | Copy-Item -Destination $InstallDir -Recurse -Force
+        foreach ($item in $sourceItems) {
+            $destination = Join-Path $InstallDir $item.Name
+            if (Test-Path -LiteralPath $destination) {
+                Move-Item -LiteralPath $destination -Destination (Join-Path $backupPath $item.Name) -Force
+            }
+        }
+
+        foreach ($item in $sourceItems) {
+            Copy-Item -LiteralPath $item.FullName -Destination $InstallDir -Recurse -Force
+        }
+
         $installedExe = Join-Path $InstallDir $ExeName
         if (-not (Test-Path -LiteralPath $installedExe)) {
             throw "$ExeName was not copied to $InstallDir."
@@ -254,15 +285,20 @@ try {
     }
     catch {
         Write-UpdateLog "Update failed during replace: $_"
-        if (Test-Path -LiteralPath $InstallDir) {
-            Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+        foreach ($item in $sourceItems) {
+            $destination = Join-Path $InstallDir $item.Name
+            if (Test-Path -LiteralPath $destination) {
+                Remove-Item -LiteralPath $destination -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
         if (Test-Path -LiteralPath $backupPath) {
-            Move-Item -LiteralPath $backupPath -Destination $InstallDir -Force
-            $oldExe = Join-Path $InstallDir $ExeName
-            if (Test-Path -LiteralPath $oldExe) {
-                Start-Process -FilePath $oldExe -WorkingDirectory $InstallDir
+            foreach ($backupItem in Get-ChildItem -LiteralPath $backupPath) {
+                Move-Item -LiteralPath $backupItem.FullName -Destination $InstallDir -Force
             }
+        }
+        $oldExe = Join-Path $InstallDir $ExeName
+        if (Test-Path -LiteralPath $oldExe) {
+            Start-Process -FilePath $oldExe -WorkingDirectory $InstallDir
         }
         throw
     }
