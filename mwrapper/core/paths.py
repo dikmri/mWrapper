@@ -20,6 +20,10 @@ def local_appdata_dir() -> Path:
     return Path.home() / ".local" / "share" / APP_NAME
 
 
+def default_setup_dir() -> Path:
+    return local_appdata_dir()
+
+
 def default_output_dir() -> Path:
     return Path.home() / "Videos" / APP_NAME / "outputs"
 

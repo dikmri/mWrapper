@@ -30,6 +30,7 @@ def test_patch_mmaudio_demo_replaces_torchaudio_save(tmp_path: Path) -> None:
     assert "import soundfile as sf" in patched
     assert "torchaudio.save" not in patched
     assert "_mwrapper_save_audio(save_path, audio, seq_cfg.sampling_rate)" in patched
+    assert "all_model_cfg['nsfw_mmaudio']" in patched
 
 
 def test_patch_mmaudio_demo_is_idempotent(tmp_path: Path) -> None:

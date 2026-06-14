@@ -15,6 +15,7 @@ def test_config_manager_creates_default_config(tmp_path: Path) -> None:
     assert config.paths.tools_dir
     assert config.mmaudio.python_executable
     assert config.generation.require_cuda is True
+    assert config.model.default_model == "nsfw_mmaudio"
 
 
 def test_config_manager_round_trips_mmaudio_script_path(tmp_path: Path) -> None:
@@ -27,3 +28,17 @@ def test_config_manager_round_trips_mmaudio_script_path(tmp_path: Path) -> None:
     loaded = manager.load()
 
     assert loaded.mmaudio.demo_script_path == "C:/MMAudio/demo.py"
+
+
+def test_config_manager_round_trips_last_prompts(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    manager = ConfigManager(path)
+    config = manager.load()
+    config.generation.last_positive_prompt = "rain and footsteps"
+    config.generation.last_negative_prompt = "music"
+
+    manager.save(config)
+    loaded = manager.load()
+
+    assert loaded.generation.last_positive_prompt == "rain and footsteps"
+    assert loaded.generation.last_negative_prompt == "music"

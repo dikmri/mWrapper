@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import threading
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -31,10 +32,15 @@ class MMAudioRunner:
         command = [
             job.python_executable or "python",
             str(job.mmaudio_script_path),
+            f"--variant={job.model_id}",
             f"--duration={duration:g}",
             f"--video={job.input_video_path}",
             f"--prompt={job.english_prompt}",
         ]
+        if job.negative_prompt.strip():
+            command.append(f"--negative_prompt={job.negative_prompt}")
+        if job.seed is not None:
+            command.append(f"--seed={job.seed}")
         command.extend(job.extra_args)
         return command
 
@@ -45,10 +51,6 @@ class MMAudioRunner:
 
         try:
             self._validate_job(job)
-            patch_result = patch_mmaudio_demo(job.mmaudio_script_path)
-            if patch_result.changed:
-                on_log(patch_result.message)
-
             cuda_info = inspect_python_cuda(job.python_executable, job.mmaudio_working_dir)
             on_log(format_cuda_info(cuda_info))
             if job.require_cuda and not cuda_info.cuda_usable:
@@ -86,6 +88,10 @@ class MMAudioRunner:
                     finished_at=datetime.now(),
                 )
 
+            patch_result = patch_mmaudio_demo(job.mmaudio_script_path)
+            if patch_result.changed:
+                on_log(patch_result.message)
+
             search_dirs = self._existing_or_creatable_search_dirs(job)
             before = snapshot_media_files(search_dirs)
             command = self.build_command(job)
@@ -103,6 +109,7 @@ class MMAudioRunner:
                     self._process = subprocess.Popen(
                         command,
                         cwd=str(job.mmaudio_working_dir),
+                        env=self._runtime_env(job),
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True,
@@ -217,7 +224,7 @@ class MMAudioRunner:
                 "MMAudio demo.py is not configured or does not exist."
             )
         if not job.english_prompt.strip():
-            raise ValueError("English prompt is required.")
+            raise ValueError("Positive prompt is required.")
 
     @staticmethod
     def _existing_or_creatable_search_dirs(job: GenerateJob) -> list[Path]:
@@ -241,3 +248,17 @@ class MMAudioRunner:
             seen.add(resolved)
             result.append(resolved)
         return result
+
+    @staticmethod
+    def _runtime_env(job: GenerateJob) -> dict[str, str]:
+        env = os.environ.copy()
+        if job.runtime_cache_dir is None:
+            return env
+
+        cache_root = job.runtime_cache_dir
+        hf_home = cache_root / "huggingface"
+        env["HF_HOME"] = str(hf_home)
+        env["HUGGINGFACE_HUB_CACHE"] = str(hf_home / "hub")
+        env["TORCH_HOME"] = str(cache_root / "torch")
+        env["XDG_CACHE_HOME"] = str(cache_root)
+        return env

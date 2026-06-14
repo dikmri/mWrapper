@@ -16,6 +16,7 @@ def test_uv_commands_target_dedicated_venv_python(tmp_path: Path) -> None:
     assert commands[0][0] == [
         "uv",
         "venv",
+        "--no-cache",
         "--python",
         str(tmp_path / "base" / "python.exe"),
         "--clear",
@@ -26,18 +27,20 @@ def test_uv_commands_target_dedicated_venv_python(tmp_path: Path) -> None:
         "uv",
         "pip",
         "install",
+        "--no-cache",
         "--python",
-        str(venv_python),
     ]
+    assert str(venv_python) in commands[1][0]
     assert "--reinstall" in commands[1][0]
     assert "--index-url" in commands[1][0]
     assert commands[2][0][:5] == [
         "uv",
         "pip",
         "install",
+        "--no-cache",
         "--python",
-        str(venv_python),
     ]
+    assert str(venv_python) in commands[2][0]
 
 
 def test_pip_fallback_commands_install_inside_venv(tmp_path: Path) -> None:
@@ -58,6 +61,9 @@ def test_pip_fallback_commands_install_inside_venv(tmp_path: Path) -> None:
         str(tmp_path / "venv"),
     ]
     assert commands[1][0][:4] == [str(venv_python), "-m", "pip", "install"]
+    assert "--no-cache-dir" in commands[1][0]
     assert commands[2][0][:4] == [str(venv_python), "-m", "pip", "install"]
+    assert "--no-cache-dir" in commands[2][0]
     assert "--force-reinstall" in commands[2][0]
     assert commands[3][0][:4] == [str(venv_python), "-m", "pip", "install"]
+    assert "--no-cache-dir" in commands[3][0]

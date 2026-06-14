@@ -10,7 +10,8 @@ from PySide6.QtCore import QThread, Signal
 from ..services.package_installer import (
     MMAUDIO_NUMPY_SPEC,
     MMAUDIO_SOUNDFILE_SPEC,
-    PYTORCH_CUDA_INDEX_URL,
+    PyTorchInstallSpec,
+    select_pytorch_install_spec,
 )
 
 
@@ -23,12 +24,14 @@ class MMAudioEnvSetupWorker(QThread):
         base_python: Path,
         venv_dir: Path,
         mmaudio_dir: Path,
+        pytorch_spec: PyTorchInstallSpec | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
         self.base_python = base_python
         self.venv_dir = venv_dir
         self.mmaudio_dir = mmaudio_dir
+        self.pytorch_spec = pytorch_spec or select_pytorch_install_spec()
         self._process: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
 
@@ -36,6 +39,9 @@ class MMAudioEnvSetupWorker(QThread):
         venv_python = self.venv_dir / "Scripts" / "python.exe"
         uv_path = shutil.which("uv")
         commands = self._uv_commands(uv_path, venv_python) if uv_path else self._pip_commands(venv_python)
+        self.log.emit(
+            f"PyTorch構成: {self.pytorch_spec.label} / index: {self.pytorch_spec.index_url}"
+        )
         self.log.emit(
             "uvを使ってMMAudio専用venvを構築します。"
             if uv_path
@@ -64,6 +70,7 @@ class MMAudioEnvSetupWorker(QThread):
                 [
                     uv_path,
                     "venv",
+                    "--no-cache",
                     "--python",
                     str(self.base_python),
                     "--clear",
@@ -77,6 +84,7 @@ class MMAudioEnvSetupWorker(QThread):
                     uv_path,
                     "pip",
                     "install",
+                    "--no-cache",
                     "--python",
                     str(venv_python),
                     "--reinstall",
@@ -84,7 +92,7 @@ class MMAudioEnvSetupWorker(QThread):
                     "torchvision",
                     "torchaudio",
                     "--index-url",
-                    PYTORCH_CUDA_INDEX_URL,
+                    self.pytorch_spec.index_url,
                 ],
                 None,
             ),
@@ -93,6 +101,7 @@ class MMAudioEnvSetupWorker(QThread):
                     uv_path,
                     "pip",
                     "install",
+                    "--no-cache",
                     "--python",
                     str(venv_python),
                     "--upgrade",
@@ -108,20 +117,21 @@ class MMAudioEnvSetupWorker(QThread):
     def _pip_commands(self, venv_python: Path) -> list[tuple[list[str], Path | None]]:
         return [
             ([str(self.base_python), "-m", "venv", "--clear", str(self.venv_dir)], None),
-            ([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"], None),
+            ([str(venv_python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "pip"], None),
             (
                 [
                     str(venv_python),
                     "-m",
                     "pip",
                     "install",
+                    "--no-cache-dir",
                     "--upgrade",
                     "--force-reinstall",
                     "torch",
                     "torchvision",
                     "torchaudio",
                     "--index-url",
-                    PYTORCH_CUDA_INDEX_URL,
+                    self.pytorch_spec.index_url,
                 ],
                 None,
             ),
@@ -131,6 +141,7 @@ class MMAudioEnvSetupWorker(QThread):
                     "-m",
                     "pip",
                     "install",
+                    "--no-cache-dir",
                     "--upgrade",
                     "-e",
                     ".",

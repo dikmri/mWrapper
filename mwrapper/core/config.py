@@ -7,23 +7,29 @@ from pathlib import Path
 from typing import Any
 
 from ..constants import DEFAULT_MODEL_ID, GOOGLE_API_KEY_ENV
+from ..services.model_assets import MODEL_CHOICES, normalize_model_id
 from .paths import (
     config_path,
     default_logs_dir,
     default_models_dir,
     default_output_dir,
+    default_setup_dir,
     default_temp_dir,
     default_tools_dir,
+    default_venvs_dir,
     ensure_dir,
 )
 
 
 @dataclass(slots=True)
 class PathSettings:
+    setup_dir: str = ""
+    setup_dir_confirmed: bool = False
     output_dir: str = ""
     temp_dir: str = ""
     models_dir: str = ""
     tools_dir: str = ""
+    venvs_dir: str = ""
     logs_dir: str = ""
     ffmpeg_path: str = ""
     ffprobe_path: str = ""
@@ -40,10 +46,14 @@ class ModelSettings:
     default_model: str = DEFAULT_MODEL_ID
     models: dict[str, dict[str, str]] = field(
         default_factory=lambda: {
-            DEFAULT_MODEL_ID: {
+            "nsfw_mmaudio": {
                 "repo_id": "phazei/NSFW_MMaudio",
                 "local_dir": "",
-            }
+            },
+            "large_44k_v2": {
+                "repo_id": "hkchengrex/MMAudio",
+                "local_dir": "",
+            },
         }
     )
 
@@ -52,6 +62,9 @@ class ModelSettings:
 class GenerationSettings:
     default_duration: float = 8.0
     default_seed_mode: str = "random"
+    fixed_seed: int = 42
+    last_positive_prompt: str = ""
+    last_negative_prompt: str = ""
     keep_temp_files: bool = False
     require_cuda: bool = True
 
@@ -84,10 +97,12 @@ class AppConfig:
     @classmethod
     def defaults(cls) -> "AppConfig":
         cfg = cls()
+        cfg.paths.setup_dir = str(default_setup_dir())
         cfg.paths.output_dir = str(default_output_dir())
         cfg.paths.temp_dir = str(default_temp_dir())
         cfg.paths.models_dir = str(default_models_dir())
         cfg.paths.tools_dir = str(default_tools_dir())
+        cfg.paths.venvs_dir = str(default_venvs_dir())
         cfg.paths.logs_dir = str(default_logs_dir())
         cfg.paths.ffmpeg_path = shutil.which("ffmpeg") or ""
         cfg.paths.ffprobe_path = shutil.which("ffprobe") or ""
@@ -104,6 +119,9 @@ class AppConfig:
         generation = {**asdict(defaults.generation), **data.get("generation", {})}
         mmaudio = {**asdict(defaults.mmaudio), **data.get("mmaudio", {})}
         safety = {**asdict(defaults.safety), **data.get("safety", {})}
+        model["default_model"] = normalize_model_id(str(model.get("default_model", DEFAULT_MODEL_ID)))
+        if model["default_model"] not in MODEL_CHOICES:
+            model["default_model"] = DEFAULT_MODEL_ID
 
         return cls(
             version=int(data.get("version", defaults.version)),
@@ -152,6 +170,7 @@ class ConfigManager:
             config.paths.temp_dir,
             config.paths.models_dir,
             config.paths.tools_dir,
+            config.paths.venvs_dir,
             config.paths.logs_dir,
         ):
             if raw:

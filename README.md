@@ -6,13 +6,15 @@ This repository currently implements the v0.1 MVP from `mWrapper_spec.md`:
 
 - Drag and drop video input
 - ffprobe-based video information display
-- English prompt input
+- Positive and negative prompt input
+- MMAudio / NSFW_MMaudio model switching
+- Random seed by default, with optional fixed seed
 - MMAudio `demo.py` CLI execution
 - Live stdout/stderr log display
 - Generated mp4 detection
 - Built-in video preview
 - Save as `<original_filename>_mmaudio.mp4`, with numbered names on conflict
-- MMAudio source download from the official GitHub repository
+- First-run automatic setup for MMAudio, NSFW_MMaudio weights, the dedicated venv, and PyTorch
 
 ## Important Safety Notice
 
@@ -44,22 +46,24 @@ Install FFmpeg separately and make sure `ffmpeg` and `ffprobe` are available on 
 python -m mwrapper
 ```
 
-In the app:
+On first launch, mWrapper asks where to build its dedicated setup. It estimates the missing setup size and rejects locations whose drive does not have enough free space. If MMAudio, NSFW_MMaudio weights, or the dedicated venv are missing, setup then starts automatically in the background.
 
-1. Click `MMAudio取得` to download MMAudio, or manually select MMAudio's `demo.py`.
-2. Set `MMAudio Python` to the Python environment that has MMAudio dependencies installed.
-3. Click `CUDA確認` and confirm CUDA is available.
-4. Optionally set MMAudio's output folder. If left empty, mWrapper searches `output` next to `demo.py`.
-5. Drop a video file.
-6. Enter an English prompt.
-7. Click Generate.
-8. Preview the result and save it.
+In normal use:
+
+1. Drop a video file.
+2. Choose `NSFW_MMaudio` or `MMAudio`.
+3. Enter a positive prompt and, optionally, a negative prompt.
+4. Leave `seed固定` off for a new random result each run, or turn it on to reuse the displayed seed.
+5. Click Generate.
+6. Preview the result and save it.
+
+The main window accepts video drag and drop anywhere. Environment controls are intentionally hidden from normal use; use `初期化` only when the dedicated setup is broken or you want to rebuild it in another folder. Prompt text is saved on exit and restored on the next launch.
 
 ## MMAudio Setup
 
 mWrapper does not include MMAudio, model weights, FFmpeg binaries, or third-party model files. Configure these separately according to their own instructions and licenses.
 
-The `MMAudio取得` button downloads the official MMAudio source ZIP from GitHub into the local mWrapper tools directory and automatically fills the `demo.py` path. This installs the source code only. Python dependencies and model weights still follow the MMAudio project instructions.
+The `MMAudio取得` button downloads the official MMAudio source ZIP from GitHub into the local mWrapper tools directory and automatically fills the `demo.py` path. First-run setup also downloads the NSFW_MMaudio checkpoint to `weights/nsfw_gold_8.5k_final.pth` and patches MMAudio's `demo.py` so it can be selected as the `nsfw_mmaudio` variant.
 
 ## CUDA / GPU Setup
 
@@ -67,7 +71,9 @@ MMAudio uses GPU only when the Python environment that runs `demo.py` has a CUDA
 
 Use `CUDA確認` in the app to inspect the selected `MMAudio Python`. The app defaults to `CUDA必須`, so generation is blocked before launch when CUDA is unavailable instead of silently running on CPU.
 
-Use `専用venv作成` when possible. It creates a dedicated MMAudio virtual environment with Python 3.10-3.12, CUDA PyTorch, and MMAudio dependencies. This avoids dependency conflicts in a global Python 3.13 environment and keeps MMAudio packages out of other Python environments.
+First-run setup creates a dedicated MMAudio virtual environment with Python 3.10-3.12, PyTorch, and MMAudio dependencies. It checks NVIDIA hardware with `nvidia-smi` and selects the PyTorch wheel index automatically. For NVIDIA GPUs, mWrapper defaults to CUDA 12.8, matching PyTorch's current Windows pip selector and avoiding older wheel/GPU architecture mismatches. This avoids dependency conflicts in a global Python 3.13 environment and keeps MMAudio packages out of other Python environments.
+
+mWrapper does not build a full ComfyUI environment. The large pieces are the CUDA PyTorch wheel set, MMAudio/NSFW_MMaudio model weights, and runtime model caches such as Hugging Face/OpenCLIP assets. To reduce C: drive pressure, setup uses no-cache pip/uv installs and routes runtime Hugging Face/Torch caches under the selected setup folder.
 
 When `uv` is available, `専用venv作成` uses `uv venv --clear --seed` and `uv pip install --python <venv_python>`. If a dedicated venv already exists, it is rebuilt so stale CPU-only or older CUDA PyTorch installs are removed. If `uv` is not installed, it falls back to Python's built-in `venv --clear` plus pip inside that venv.
 
@@ -111,6 +117,12 @@ The v0.1 runner calls MMAudio in this shape:
 
 ```powershell
 python demo.py --duration=8 --video="<input_video>" --prompt="<english_prompt>"
+```
+
+Current mWrapper calls MMAudio with explicit variant and seed values:
+
+```powershell
+python demo.py --variant=nsfw_mmaudio --duration=8 --video="<input_video>" --prompt="<positive_prompt>" --negative_prompt="<negative_prompt>" --seed=123
 ```
 
 If your local MMAudio checkout uses different arguments, update the runner configuration or code before generation.

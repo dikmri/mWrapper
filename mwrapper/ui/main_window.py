@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import os
+import random
 import uuid
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QCloseEvent, QDesktopServices, QIcon, QTextOption
+from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QDragEnterEvent, QDropEvent, QIcon, QTextOption
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
-    QFormLayout,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QProgressBar,
+    QSpinBox,
     QSizePolicy,
     QSplitter,
     QDoubleSpinBox,
@@ -31,16 +33,22 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..constants import APP_ICON_PATH, APP_NAME, DEFAULT_MODEL_ID
+from ..constants import APP_ICON_PATH, APP_NAME, SUPPORTED_VIDEO_EXTENSIONS
 from ..core.config import AppConfig, ConfigManager
 from ..core.jobs import GenerateJob, GenerateResult
-from ..core.paths import default_venvs_dir
 from ..services.cuda_environment import format_cuda_info, inspect_python_cuda
 from ..services.ffmpeg import FFprobeError, VideoInfo, find_tool
 from ..services.log_formatter import format_log_line
 from ..services.mmaudio_dependencies import (
     format_mmaudio_dependency_info,
     inspect_mmaudio_dependencies,
+)
+from ..services.mmaudio_demo_patch import patch_mmaudio_demo
+from ..services.mmaudio_downloader import default_mmaudio_install_dir
+from ..services.model_assets import (
+    MODEL_CHOICES,
+    nsfw_mmaudio_model_path,
+    normalize_model_id,
 )
 from ..services.output_manager import save_generated_video
 from ..services.package_installer import (
@@ -49,13 +57,20 @@ from ..services.package_installer import (
     build_mmaudio_dependency_repair_command,
 )
 from ..services.python_env import choose_mmaudio_base_python
+from ..services.setup_storage import (
+    estimate_required_setup_bytes,
+    format_bytes,
+    free_bytes_for_path,
+    inspect_setup_readiness,
+    setup_paths_for_root,
+)
 from ..services.video_service import UnsupportedVideoError, VideoService
+from ..workers.auto_setup_worker import AutoSetupWorker
 from ..workers.command_worker import CommandWorker
 from ..workers.generate_worker import GenerateWorker
 from ..workers.mmaudio_env_setup_worker import MMAudioEnvSetupWorker
 from ..workers.mmaudio_download_worker import MMAudioDownloadWorker
 from .preview_player import PreviewPlayer
-from .widgets.drop_area import DropArea
 
 
 MIN_GENERATION_DURATION = 0.1
@@ -68,6 +83,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} v0.1")
         if APP_ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
+        self.setAcceptDrops(True)
 
         self.config_manager = ConfigManager()
         self.config = self.config_manager.load()
@@ -80,160 +96,89 @@ class MainWindow(QMainWindow):
         self.download_worker: MMAudioDownloadWorker | None = None
         self.command_worker: CommandWorker | None = None
         self.env_setup_worker: MMAudioEnvSetupWorker | None = None
+        self.auto_setup_worker: AutoSetupWorker | None = None
 
         self._build_ui()
         self._load_config_to_ui()
         self._update_button_state()
+        QTimer.singleShot(0, self._ensure_initial_environment)
 
     def _build_ui(self) -> None:
         root = QWidget()
         root_layout = QVBoxLayout(root)
         root_layout.setSpacing(10)
 
-        root_layout.addWidget(self._build_paths_group())
-
         content_splitter = QSplitter(Qt.Orientation.Horizontal)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.drop_area = DropArea()
-        self.drop_area.file_dropped.connect(self.load_video)
-        self.drop_area.mousePressEvent = lambda event: self._choose_video()
-        left_layout.addWidget(self.drop_area)
-        left_layout.addWidget(self._build_video_info_group())
-        left_layout.addWidget(self._build_prompt_group())
-        left_layout.addWidget(self._build_generation_group())
-
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.setContentsMargins(0, 0, 0, 0)
         preview_group = QGroupBox("プレビュー")
         preview_layout = QVBoxLayout(preview_group)
         self.preview = PreviewPlayer()
         preview_layout.addWidget(self.preview)
-        right_layout.addWidget(preview_group, 2)
-        right_layout.addWidget(self._build_log_group(), 1)
+        preview_group.setMinimumWidth(640)
 
-        content_splitter.addWidget(left)
-        content_splitter.addWidget(right)
-        content_splitter.setStretchFactor(0, 2)
-        content_splitter.setStretchFactor(1, 3)
+        side = QWidget()
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(0, 0, 0, 0)
+        side_layout.addWidget(self._build_environment_group())
+        side_layout.addWidget(self._build_prompt_group(), 2)
+        side_layout.addWidget(self._build_generation_group())
+        side_layout.addWidget(self._build_log_group(), 1)
+
+        content_splitter.addWidget(preview_group)
+        content_splitter.addWidget(side)
+        content_splitter.setStretchFactor(0, 5)
+        content_splitter.setStretchFactor(1, 2)
         root_layout.addWidget(content_splitter, 1)
 
         self.setCentralWidget(root)
         self.statusBar().showMessage("Ready")
 
-    def _build_paths_group(self) -> QGroupBox:
-        group = QGroupBox("実行設定")
+    def _build_environment_group(self) -> QGroupBox:
+        group = QGroupBox("環境")
         layout = QGridLayout(group)
 
         self.demo_script_edit = QLineEdit()
-        self.demo_script_edit.setPlaceholderText("MMAudio の demo.py を指定")
-        browse_script = self._tool_button(QStyle.SP_DirOpenIcon, "demo.py を選択")
-        browse_script.clicked.connect(self._choose_demo_script)
-        self.download_mmaudio_button = QPushButton("MMAudio取得")
-        self.download_mmaudio_button.setToolTip("公式GitHubからMMAudio本体を取得して demo.py を設定")
-        self.download_mmaudio_button.clicked.connect(self.start_mmaudio_download)
-
         self.python_executable_edit = QLineEdit()
-        self.python_executable_edit.setPlaceholderText("CUDA版PyTorchを入れた Python を指定")
-        browse_python = self._tool_button(QStyle.SP_DirOpenIcon, "Python 実行ファイルを選択")
-        browse_python.clicked.connect(self._choose_python_executable)
-
-        self.check_cuda_button = QPushButton("CUDA確認")
-        self.check_cuda_button.clicked.connect(lambda: self._check_cuda_environment(show_message=True))
-
-        self.install_cuda_torch_button = QPushButton("CUDA PyTorch導入")
-        self.install_cuda_torch_button.setToolTip(
-            f"uv優先で、選択中のMMAudio Pythonへ{PYTORCH_CUDA_LABEL}版PyTorchを導入"
-        )
-        self.install_cuda_torch_button.clicked.connect(self.install_cuda_pytorch)
-
-        self.check_dependencies_button = QPushButton("MMAudio依存確認")
-        self.check_dependencies_button.clicked.connect(
-            lambda: self._check_mmaudio_dependencies(show_message=True)
-        )
-
-        self.repair_dependencies_button = QPushButton("MMAudio依存修復")
-        self.repair_dependencies_button.setToolTip(
-            "uv優先でMMAudioをeditable installし、NumPyをMMAudio互換の <2.1 に調整します"
-        )
-        self.repair_dependencies_button.clicked.connect(self.repair_mmaudio_dependencies)
-
-        self.create_venv_button = QPushButton("専用venv作成")
-        self.create_venv_button.setToolTip(
-            "uv優先でMMAudio専用venvを作成し、CUDA版PyTorchと依存関係を導入します"
-        )
-        self.create_venv_button.clicked.connect(self.create_mmaudio_venv)
-
         self.mmaudio_output_edit = QLineEdit()
-        self.mmaudio_output_edit.setPlaceholderText("空欄なら demo.py と作業フォルダ配下の output を検索")
-        browse_mmaudio_output = self._tool_button(QStyle.SP_DirOpenIcon, "MMAudio 出力フォルダを選択")
-        browse_mmaudio_output.clicked.connect(
-            lambda: self._choose_directory(self.mmaudio_output_edit)
-        )
 
         self.save_dir_edit = QLineEdit()
         browse_save = self._tool_button(QStyle.SP_DirOpenIcon, "保存先フォルダを選択")
         browse_save.clicked.connect(lambda: self._choose_directory(self.save_dir_edit))
+        self.reset_environment_button = QPushButton("初期化")
+        self.reset_environment_button.setToolTip("セットアップ先を選択し、専用環境を自動で再構築します")
+        self.reset_environment_button.clicked.connect(self.reset_environment)
 
-        layout.addWidget(QLabel("MMAudio demo.py"), 0, 0)
-        layout.addWidget(self.demo_script_edit, 0, 1)
-        layout.addWidget(browse_script, 0, 2)
-        layout.addWidget(self.download_mmaudio_button, 0, 3)
-        layout.addWidget(QLabel("MMAudio Python"), 1, 0)
-        layout.addWidget(self.python_executable_edit, 1, 1)
-        layout.addWidget(browse_python, 1, 2)
-        layout.addWidget(self.check_cuda_button, 1, 3)
-        layout.addWidget(self.install_cuda_torch_button, 1, 4)
-        layout.addWidget(self.create_venv_button, 1, 5)
-        layout.addWidget(QLabel("MMAudio output"), 2, 0)
-        layout.addWidget(self.mmaudio_output_edit, 2, 1)
-        layout.addWidget(browse_mmaudio_output, 2, 2)
-        layout.addWidget(self.check_dependencies_button, 2, 3)
-        layout.addWidget(self.repair_dependencies_button, 2, 4)
-        layout.addWidget(QLabel("保存先"), 3, 0)
-        layout.addWidget(self.save_dir_edit, 3, 1)
-        layout.addWidget(browse_save, 3, 2)
+        layout.addWidget(QLabel("保存先"), 0, 0)
+        layout.addWidget(self.save_dir_edit, 0, 1)
+        layout.addWidget(browse_save, 0, 2)
+        layout.addWidget(self.reset_environment_button, 0, 3)
         layout.setColumnStretch(1, 1)
         return group
 
-    def _build_video_info_group(self) -> QGroupBox:
-        group = QGroupBox("入力動画情報")
-        layout = QFormLayout(group)
-        self.video_info_labels: dict[str, QLabel] = {}
-        for key, caption in (
-            ("file_name", "ファイル名"),
-            ("path", "フルパス"),
-            ("duration", "長さ"),
-            ("resolution", "解像度"),
-            ("fps", "FPS"),
-            ("codec", "コーデック"),
-            ("audio", "音声"),
-            ("size", "サイズ"),
-        ):
-            label = QLabel("-")
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            label.setWordWrap(True)
-            self.video_info_labels[key] = label
-            layout.addRow(caption, label)
-        return group
-
     def _build_prompt_group(self) -> QGroupBox:
-        group = QGroupBox("英語プロンプト")
+        group = QGroupBox("プロンプト")
         layout = QVBoxLayout(group)
+        layout.addWidget(QLabel("ポジティブプロンプト"))
         self.prompt_edit = QPlainTextEdit()
         self.prompt_edit.setPlaceholderText("例: breathing, bed creaks, cloth rustling, room ambience")
         self.prompt_edit.setFixedHeight(96)
         self.prompt_edit.textChanged.connect(self._update_button_state)
         layout.addWidget(self.prompt_edit)
+        layout.addWidget(QLabel("ネガティブプロンプト"))
+        self.negative_prompt_edit = QPlainTextEdit()
+        self.negative_prompt_edit.setPlaceholderText("例: music, speech, distorted audio")
+        self.negative_prompt_edit.setFixedHeight(64)
+        layout.addWidget(self.negative_prompt_edit)
         return group
 
     def _build_generation_group(self) -> QGroupBox:
         group = QGroupBox("生成")
         layout = QVBoxLayout(group)
         settings_layout = QHBoxLayout()
+        self.model_combo = QComboBox()
+        for model_id, label in MODEL_CHOICES.items():
+            self.model_combo.addItem(label, model_id)
+        settings_layout.addWidget(QLabel("model"))
+        settings_layout.addWidget(self.model_combo)
         self.duration_spin = QDoubleSpinBox()
         self.duration_spin.setRange(MIN_GENERATION_DURATION, MAX_GENERATION_DURATION)
         self.duration_spin.setDecimals(2)
@@ -246,6 +191,11 @@ class MainWindow(QMainWindow):
             "オンの場合、CUDA版PyTorchが使えない環境ではCPU生成を開始しません"
         )
         settings_layout.addWidget(self.require_cuda_checkbox)
+        self.fixed_seed_checkbox = QCheckBox("seed固定")
+        settings_layout.addWidget(self.fixed_seed_checkbox)
+        self.seed_spin = QSpinBox()
+        self.seed_spin.setRange(0, 2_147_483_647)
+        settings_layout.addWidget(self.seed_spin)
         settings_layout.addStretch(1)
         layout.addLayout(settings_layout)
 
@@ -302,6 +252,13 @@ class MainWindow(QMainWindow):
         self.save_dir_edit.setText(self.config.paths.output_dir)
         self.duration_spin.setValue(_generation_duration_value(self.config.generation.default_duration))
         self.require_cuda_checkbox.setChecked(self.config.generation.require_cuda)
+        self.fixed_seed_checkbox.setChecked(self.config.generation.default_seed_mode == "fixed")
+        self.seed_spin.setValue(int(self.config.generation.fixed_seed))
+        self.prompt_edit.setPlainText(self.config.generation.last_positive_prompt)
+        self.negative_prompt_edit.setPlainText(self.config.generation.last_negative_prompt)
+        model_id = normalize_model_id(self.config.model.default_model)
+        index = self.model_combo.findData(model_id)
+        self.model_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _save_ui_to_config(self) -> None:
         self.config.mmaudio.demo_script_path = self.demo_script_edit.text().strip()
@@ -310,6 +267,13 @@ class MainWindow(QMainWindow):
         self.config.paths.output_dir = self.save_dir_edit.text().strip()
         self.config.generation.default_duration = float(self.duration_spin.value())
         self.config.generation.require_cuda = self.require_cuda_checkbox.isChecked()
+        self.config.generation.default_seed_mode = (
+            "fixed" if self.fixed_seed_checkbox.isChecked() else "random"
+        )
+        self.config.generation.fixed_seed = int(self.seed_spin.value())
+        self.config.generation.last_positive_prompt = self.prompt_edit.toPlainText()
+        self.config.generation.last_negative_prompt = self.negative_prompt_edit.toPlainText()
+        self.config.model.default_model = normalize_model_id(str(self.model_combo.currentData()))
         self.config_manager.save(self.config)
         ConfigManager.ensure_runtime_dirs(self.config)
 
@@ -326,10 +290,9 @@ class MainWindow(QMainWindow):
         self.current_video_path = path
         self.current_video_info = info
         self.generated_video_path = None
-        self.drop_area.set_file_name(path.name)
         self.preview.set_source(path)
-        self._display_video_info(info)
         self._sync_duration_to_video(info.duration)
+        self.statusBar().showMessage(f"入力動画: {path.name}")
         self._append_log(f"Loaded video: {path}")
         self._update_button_state()
 
@@ -342,6 +305,8 @@ class MainWindow(QMainWindow):
             return
         if self.env_setup_worker is not None and self.env_setup_worker.isRunning():
             return
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
+            return
 
         self._save_ui_to_config()
         self.log_view.clear()
@@ -353,6 +318,153 @@ class MainWindow(QMainWindow):
         self.download_worker.finished.connect(lambda: self._set_downloading(False))
         self.download_worker.start()
 
+    def _ensure_initial_environment(self) -> None:
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
+            return
+        if self.download_worker is not None and self.download_worker.isRunning():
+            return
+        if self.env_setup_worker is not None and self.env_setup_worker.isRunning():
+            return
+
+        setup_paths = setup_paths_for_root(Path(self.config.paths.setup_dir))
+        readiness = inspect_setup_readiness(setup_paths)
+        if not readiness.ready and not self.config.paths.setup_dir_confirmed:
+            selected = self._choose_setup_root_for_initial_setup(setup_paths.root)
+            if selected is None:
+                self._append_log("初回自動セットアップをキャンセルしました。")
+                return
+            self._apply_setup_root(selected)
+            setup_paths = setup_paths_for_root(selected)
+            readiness = inspect_setup_readiness(setup_paths)
+
+        tools_dir = setup_paths.tools_dir
+        install_dir = default_mmaudio_install_dir(tools_dir)
+        demo_path = install_dir / "demo.py"
+        venv_dir = setup_paths.venvs_dir / "mmaudio"
+        venv_python = venv_dir / "Scripts" / "python.exe"
+        nsfw_weights = nsfw_mmaudio_model_path(install_dir)
+
+        demo_ready = demo_path.exists()
+        venv_ready = venv_python.exists()
+        nsfw_ready = nsfw_weights.exists() and nsfw_weights.stat().st_size > 0
+
+        if demo_ready:
+            try:
+                patch_mmaudio_demo(demo_path)
+            except Exception as exc:
+                self._append_log(f"MMAudio demo.py の互換パッチ確認に失敗しました: {exc}")
+
+        if demo_ready and venv_ready and nsfw_ready:
+            changed = False
+            if self.demo_script_edit.text().strip() != str(demo_path):
+                self.demo_script_edit.setText(str(demo_path))
+                changed = True
+            if self.python_executable_edit.text().strip() != str(venv_python):
+                self.python_executable_edit.setText(str(venv_python))
+                changed = True
+            if not self.mmaudio_output_edit.text().strip():
+                self.mmaudio_output_edit.setText(str(install_dir / "output"))
+                changed = True
+            if changed:
+                self._save_ui_to_config()
+            self._append_log("自動セットアップ確認: 専用環境は準備済みです。")
+            self._check_cuda_environment(show_message=False)
+            self._check_mmaudio_dependencies(show_message=False)
+            return
+
+        base_python = None if venv_ready else choose_mmaudio_base_python()
+        if not venv_ready and base_python is None:
+            self._append_log("自動セットアップを開始できません: Python 3.10-3.12 が見つかりません。")
+            return
+
+        self.log_view.clear()
+        self._append_log("初回自動セットアップを開始します。")
+        self._start_auto_setup(setup_paths, base_python.path if base_python else None, not venv_ready)
+
+    def reset_environment(self) -> None:
+        if self._is_busy():
+            return
+
+        selected = self._choose_setup_root_for_initial_setup(Path(self.config.paths.setup_dir))
+        if selected is None:
+            self._append_log("初期化をキャンセルしました。")
+            return
+
+        self._apply_setup_root(selected)
+        base_python = choose_mmaudio_base_python()
+        if base_python is None:
+            self._append_log("初期化を開始できません: Python 3.10-3.12 が見つかりません。")
+            return
+
+        self.log_view.clear()
+        self._append_log("初期化を開始します。")
+        self._start_auto_setup(setup_paths_for_root(selected), base_python.path, True)
+
+    def _start_auto_setup(
+        self,
+        setup_paths,
+        base_python_path: Path | None,
+        rebuild_venv: bool,
+    ) -> None:
+        self.auto_setup_worker = AutoSetupWorker(
+            setup_paths.tools_dir,
+            setup_paths.venvs_dir / "mmaudio",
+            base_python_path,
+            rebuild_venv=rebuild_venv,
+            parent=self,
+        )
+        self.auto_setup_worker.log.connect(self._append_log)
+        self.auto_setup_worker.finished_auto_setup.connect(self._auto_setup_finished)
+        self.auto_setup_worker.finished.connect(lambda: self._set_installing(False))
+        self._set_installing(True)
+        self.auto_setup_worker.start()
+
+    def _choose_setup_root_for_initial_setup(self, initial_root: Path) -> Path | None:
+        QMessageBox.information(
+            self,
+            "初回セットアップ先",
+            "MMAudio、NSFW_MMaudio、専用Python環境を構築するフォルダを選択してください。\n"
+            "必要容量は選択先の既存ファイル状況から見積もり、空き容量が足りない場所は使用できません。",
+        )
+        while True:
+            directory = QFileDialog.getExistingDirectory(
+                self,
+                "初回セットアップ先フォルダを選択",
+                str(initial_root),
+            )
+            if not directory:
+                return None
+            root = Path(directory)
+            paths = setup_paths_for_root(root)
+            readiness = inspect_setup_readiness(paths)
+            required = estimate_required_setup_bytes(readiness)
+            free = free_bytes_for_path(root)
+            if free >= required:
+                return root
+            QMessageBox.warning(
+                self,
+                "空き容量不足",
+                "選択したドライブの空き容量が不足しています。\n\n"
+                f"必要見込み: {format_bytes(required)}\n"
+                f"空き容量: {format_bytes(free)}\n\n"
+                "別のフォルダを選択してください。",
+            )
+
+    def _apply_setup_root(self, root: Path) -> None:
+        paths = setup_paths_for_root(root)
+        self.config.paths.setup_dir = str(paths.root)
+        self.config.paths.setup_dir_confirmed = True
+        self.config.paths.tools_dir = str(paths.tools_dir)
+        self.config.paths.temp_dir = str(paths.temp_dir)
+        self.config.paths.models_dir = str(paths.models_dir)
+        self.config.paths.logs_dir = str(paths.logs_dir)
+        self.config.paths.venvs_dir = str(paths.venvs_dir)
+        self.demo_script_edit.setText(str(default_mmaudio_install_dir(paths.tools_dir) / "demo.py"))
+        self.python_executable_edit.setText(str(paths.venvs_dir / "mmaudio" / "Scripts" / "python.exe"))
+        self.mmaudio_output_edit.setText(str(default_mmaudio_install_dir(paths.tools_dir) / "output"))
+        self._save_ui_to_config()
+        self._append_log(f"初回セットアップ先を設定しました: {paths.root}")
+
     def start_generation(self) -> None:
         if self.worker is not None and self.worker.isRunning():
             return
@@ -360,14 +472,20 @@ class MainWindow(QMainWindow):
             return
         if self.env_setup_worker is not None and self.env_setup_worker.isRunning():
             return
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
+            return
         if self.current_video_path is None:
             self._show_error("入力エラー", "動画を選択してください。")
             return
 
         prompt = self.prompt_edit.toPlainText().strip()
         if not prompt:
-            self._show_error("入力エラー", "英語プロンプトを入力してください。")
+            self._show_error("入力エラー", "ポジティブプロンプトを入力してください。")
             return
+        negative_prompt = self.negative_prompt_edit.toPlainText().strip()
+        model_id = normalize_model_id(str(self.model_combo.currentData()))
+        seed = self._current_seed()
+        self.seed_spin.setValue(seed)
 
         demo_script = Path(self.demo_script_edit.text().strip())
         if not demo_script.exists():
@@ -424,15 +542,17 @@ class MainWindow(QMainWindow):
             input_video_path=self.current_video_path,
             japanese_prompt="",
             english_prompt=prompt,
-            seed=None,
+            negative_prompt=negative_prompt,
+            seed=seed,
             duration=float(self.duration_spin.value()),
-            model_id=DEFAULT_MODEL_ID,
+            model_id=model_id,
             output_dir=temp_dir,
             created_at=datetime.now(),
             python_executable=self.config.mmaudio.python_executable or "python",
             mmaudio_script_path=demo_script,
             mmaudio_working_dir=demo_script.parent,
             mmaudio_output_dir=mmaudio_output,
+            runtime_cache_dir=Path(self.config.paths.models_dir) / "runtime_cache",
             search_dirs=search_dirs,
             extra_args=list(self.config.mmaudio.extra_args),
             require_cuda=self.config.generation.require_cuda,
@@ -472,6 +592,9 @@ class MainWindow(QMainWindow):
         if self.env_setup_worker is not None and self.env_setup_worker.isRunning():
             self._append_log("MMAudio専用venv作成を停止しています...")
             self.env_setup_worker.cancel()
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
+            self._append_log("自動セットアップを停止しています...")
+            self.auto_setup_worker.cancel()
 
     def install_cuda_pytorch(self) -> None:
         if self.worker is not None and self.worker.isRunning():
@@ -481,6 +604,8 @@ class MainWindow(QMainWindow):
         if self.command_worker is not None and self.command_worker.isRunning():
             return
         if self.env_setup_worker is not None and self.env_setup_worker.isRunning():
+            return
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
             return
 
         self._save_ui_to_config()
@@ -514,6 +639,8 @@ class MainWindow(QMainWindow):
         if self.download_worker is not None and self.download_worker.isRunning():
             return
         if self.command_worker is not None and self.command_worker.isRunning():
+            return
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
             return
 
         self._save_ui_to_config()
@@ -554,7 +681,11 @@ class MainWindow(QMainWindow):
             return
         if self.command_worker is not None and self.command_worker.isRunning():
             return
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
+            return
         if self.env_setup_worker is not None and self.env_setup_worker.isRunning():
+            return
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
             return
 
         self._save_ui_to_config()
@@ -572,7 +703,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        venv_dir = default_venvs_dir() / "mmaudio"
+        venv_dir = Path(self.config.paths.venvs_dir) / "mmaudio"
         answer = QMessageBox.question(
             self,
             "MMAudio専用venv作成",
@@ -595,6 +726,20 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self._set_installing(True)
         self.env_setup_worker.start()
+
+    def _current_seed(self) -> int:
+        if self.fixed_seed_checkbox.isChecked():
+            return int(self.seed_spin.value())
+        return random.randint(0, 2_147_483_647)
+
+    def _is_busy(self) -> bool:
+        return (
+            (self.worker is not None and self.worker.isRunning())
+            or (self.download_worker is not None and self.download_worker.isRunning())
+            or (self.command_worker is not None and self.command_worker.isRunning())
+            or (self.env_setup_worker is not None and self.env_setup_worker.isRunning())
+            or (self.auto_setup_worker is not None and self.auto_setup_worker.isRunning())
+        )
 
     def save_result(self) -> None:
         if self.generated_video_path is None or self.current_video_path is None:
@@ -671,39 +816,16 @@ class MainWindow(QMainWindow):
         downloading = self.download_worker is not None and self.download_worker.isRunning()
         installing = self.command_worker is not None and self.command_worker.isRunning()
         setting_up_env = self.env_setup_worker is not None and self.env_setup_worker.isRunning()
-        busy = running or downloading or installing or setting_up_env
+        auto_setting_up = self.auto_setup_worker is not None and self.auto_setup_worker.isRunning()
+        busy = running or downloading or installing or setting_up_env or auto_setting_up
         has_video = self.current_video_path is not None
         has_prompt = bool(self.prompt_edit.toPlainText().strip())
         has_result = self.generated_video_path is not None
         self.generate_button.setEnabled(has_video and has_prompt and not busy)
-        self.stop_button.setEnabled(running or installing or setting_up_env)
+        self.stop_button.setEnabled(running or installing or setting_up_env or auto_setting_up)
         self.save_button.setEnabled(has_result and not busy)
         self.open_save_dir_button.setEnabled(not busy)
-        self.download_mmaudio_button.setEnabled(not busy)
-        self.check_cuda_button.setEnabled(not busy)
-        self.install_cuda_torch_button.setEnabled(not busy)
-        self.check_dependencies_button.setEnabled(not busy)
-        self.repair_dependencies_button.setEnabled(not busy)
-        self.create_venv_button.setEnabled(not busy)
-
-    def _display_video_info(self, info: VideoInfo) -> None:
-        self.video_info_labels["file_name"].setText(info.path.name)
-        self.video_info_labels["path"].setText(str(info.path))
-        self.video_info_labels["duration"].setText(_format_seconds(info.duration))
-        resolution = "-"
-        if info.width and info.height:
-            resolution = f"{info.width} x {info.height}"
-        self.video_info_labels["resolution"].setText(resolution)
-        self.video_info_labels["fps"].setText(
-            f"{info.fps:.3f}" if info.fps is not None else "-"
-        )
-        video_codec = info.video_codec or "-"
-        audio_codec = info.audio_codec or "なし"
-        self.video_info_labels["codec"].setText(f"video: {video_codec} / audio: {audio_codec}")
-        self.video_info_labels["audio"].setText(
-            f"{info.audio_stream_count} track(s)" if info.audio_stream_count else "なし"
-        )
-        self.video_info_labels["size"].setText(_format_bytes(info.file_size))
+        self.reset_environment_button.setEnabled(not busy)
 
     def _sync_duration_to_video(self, duration: float | None) -> None:
         if duration is None or duration <= 0:
@@ -723,6 +845,31 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.load_video(Path(path))
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        if self._first_supported_video_from_event(event) is not None:
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        path = self._first_supported_video_from_event(event)
+        if path is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.load_video(path)
+
+    @staticmethod
+    def _first_supported_video_from_event(event: QDragEnterEvent | QDropEvent) -> Path | None:
+        urls = event.mimeData().urls() if event.mimeData().hasUrls() else []
+        for url in urls:
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+                return path
+        return None
 
     def _choose_demo_script(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -830,6 +977,26 @@ class MainWindow(QMainWindow):
                 "MMAudio専用venvの作成に失敗しました。ログを確認してください。",
             )
 
+    def _auto_setup_finished(self, return_code: int, demo_path: object, venv_python: object) -> None:
+        if return_code == 0 and demo_path and venv_python:
+            demo = Path(str(demo_path))
+            python = Path(str(venv_python))
+            self.demo_script_edit.setText(str(demo))
+            self.python_executable_edit.setText(str(python))
+            self.mmaudio_output_edit.setText(str(demo.parent / "output"))
+            self._save_ui_to_config()
+            self._append_log("初回自動セットアップが完了しました。")
+            self._check_cuda_environment(show_message=False)
+            self._check_mmaudio_dependencies(show_message=False)
+            return
+
+        self._append_log(f"初回自動セットアップに失敗しました。終了コード: {return_code}")
+        QMessageBox.warning(
+            self,
+            "初回自動セットアップエラー",
+            "初回自動セットアップに失敗しました。ログを確認してください。",
+        )
+
     def _mmaudio_working_dir_or_none(self) -> Path | None:
         raw = self.demo_script_edit.text().strip()
         if not raw:
@@ -852,6 +1019,14 @@ class MainWindow(QMainWindow):
                 self,
                 "MMAudio専用venv作成中",
                 "MMAudio専用venvの作成中です。完了してから終了してください。",
+            )
+            event.ignore()
+            return
+        if self.auto_setup_worker is not None and self.auto_setup_worker.isRunning():
+            QMessageBox.information(
+                self,
+                "初回自動セットアップ中",
+                "初回自動セットアップ中です。完了してから終了してください。",
             )
             event.ignore()
             return
@@ -886,26 +1061,7 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
-def _format_seconds(value: float | None) -> str:
-    if value is None:
-        return "-"
-    minutes, seconds = divmod(int(round(value)), 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours:
-        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
-    return f"{minutes:02d}:{seconds:02d}"
-
-
 def _generation_duration_value(value: float | None) -> float:
     if value is None or value <= 0:
         return 8.0
     return round(min(max(float(value), MIN_GENERATION_DURATION), MAX_GENERATION_DURATION), 2)
-
-
-def _format_bytes(value: int) -> str:
-    size = float(value)
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if size < 1024 or unit == "TB":
-            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} B"
-        size /= 1024
-    return f"{value} B"

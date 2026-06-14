@@ -17,7 +17,7 @@ SUPPORTED_VIDEO_EXTENSIONS = {
 
 GOOGLE_API_KEY_ENV = "MWRAPPER_GOOGLE_API_KEY"
 
-DEFAULT_MODEL_ID = "NSFW_MMaudio"
+DEFAULT_MODEL_ID = "nsfw_mmaudio"
 
 MMAUDIO_REPOSITORY_URL = "https://github.com/hkchengrex/MMAudio"
 MMAUDIO_MAIN_ZIP_URL = "https://github.com/hkchengrex/MMAudio/archive/refs/heads/main.zip"

@@ -11,6 +11,7 @@ class GenerateJob:
     input_video_path: Path
     japanese_prompt: str
     english_prompt: str
+    negative_prompt: str
     seed: int | None
     duration: float | None
     model_id: str
@@ -20,6 +21,7 @@ class GenerateJob:
     mmaudio_script_path: Path
     mmaudio_working_dir: Path
     mmaudio_output_dir: Path | None
+    runtime_cache_dir: Path | None
     search_dirs: list[Path]
     extra_args: list[str]
     require_cuda: bool = True

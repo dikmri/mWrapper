@@ -14,15 +14,17 @@ def test_build_command_uses_cli_shape(tmp_path: Path) -> None:
         input_video_path=video,
         japanese_prompt="",
         english_prompt="rain and footsteps",
-        seed=None,
+        negative_prompt="music",
+        seed=123,
         duration=8,
-        model_id="NSFW_MMaudio",
+        model_id="nsfw_mmaudio",
         output_dir=tmp_path / "job",
         created_at=datetime.now(),
         python_executable="python",
         mmaudio_script_path=script,
         mmaudio_working_dir=tmp_path,
         mmaudio_output_dir=None,
+        runtime_cache_dir=tmp_path / "cache",
         search_dirs=[],
         extra_args=["--variant=test"],
     )
@@ -32,9 +34,12 @@ def test_build_command_uses_cli_shape(tmp_path: Path) -> None:
     assert command == [
         "python",
         str(script),
+        "--variant=nsfw_mmaudio",
         "--duration=8",
         f"--video={video}",
         "--prompt=rain and footsteps",
+        "--negative_prompt=music",
+        "--seed=123",
         "--variant=test",
     ]
 
@@ -49,6 +54,7 @@ def test_run_aborts_when_cuda_is_required_but_unavailable(tmp_path: Path, monkey
         input_video_path=video,
         japanese_prompt="",
         english_prompt="rain and footsteps",
+        negative_prompt="",
         seed=None,
         duration=8,
         model_id="NSFW_MMaudio",
@@ -58,6 +64,7 @@ def test_run_aborts_when_cuda_is_required_but_unavailable(tmp_path: Path, monkey
         mmaudio_script_path=script,
         mmaudio_working_dir=tmp_path,
         mmaudio_output_dir=None,
+        runtime_cache_dir=None,
         search_dirs=[],
         extra_args=[],
         require_cuda=True,
@@ -87,6 +94,7 @@ def test_run_aborts_when_cuda_arch_is_incompatible(tmp_path: Path, monkeypatch) 
         input_video_path=video,
         japanese_prompt="",
         english_prompt="rain and footsteps",
+        negative_prompt="",
         seed=None,
         duration=8,
         model_id="NSFW_MMaudio",
@@ -96,6 +104,7 @@ def test_run_aborts_when_cuda_arch_is_incompatible(tmp_path: Path, monkeypatch) 
         mmaudio_script_path=script,
         mmaudio_working_dir=tmp_path,
         mmaudio_output_dir=None,
+        runtime_cache_dir=None,
         search_dirs=[],
         extra_args=[],
         require_cuda=True,
@@ -117,3 +126,33 @@ def test_run_aborts_when_cuda_arch_is_incompatible(tmp_path: Path, monkeypatch) 
 
     assert not result.success
     assert "CUDA対応PyTorch" in (result.error_message or "")
+
+
+def test_runtime_env_redirects_model_caches(tmp_path: Path) -> None:
+    script = tmp_path / "demo.py"
+    video = tmp_path / "input.mp4"
+    job = GenerateJob(
+        job_id="job",
+        input_video_path=video,
+        japanese_prompt="",
+        english_prompt="rain and footsteps",
+        negative_prompt="",
+        seed=None,
+        duration=8,
+        model_id="nsfw_mmaudio",
+        output_dir=tmp_path / "job",
+        created_at=datetime.now(),
+        python_executable="python",
+        mmaudio_script_path=script,
+        mmaudio_working_dir=tmp_path,
+        mmaudio_output_dir=None,
+        runtime_cache_dir=tmp_path / "cache",
+        search_dirs=[],
+        extra_args=[],
+        require_cuda=True,
+    )
+
+    env = MMAudioRunner._runtime_env(job)
+
+    assert env["HF_HOME"] == str(tmp_path / "cache" / "huggingface")
+    assert env["TORCH_HOME"] == str(tmp_path / "cache" / "torch")
