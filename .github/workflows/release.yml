@@ -36,18 +36,20 @@ jobs:
       - name: Write release notes
         shell: pwsh
         run: |
-          @"
-          # mWrapper $env:GITHUB_REF_NAME
-
-          このリリースには Python wheel と source distribution を添付しています。
-
-          ## インストール
-
-          ```powershell
-          py -m pip install --user git+https://github.com/dikmri/mWrapper.git@$env:GITHUB_REF_NAME
-          py -m mwrapper
-          ```
-          "@ | Set-Content -LiteralPath release_notes.md -Encoding UTF8
+          $notes = @(
+            "# mWrapper $env:GITHUB_REF_NAME"
+            ""
+            "このリリースには Python wheel と source distribution を添付しています。"
+            ""
+            "## インストール"
+            ""
+            '```powershell'
+            "py -m pip install --user git+https://github.com/dikmri/mWrapper.git@$env:GITHUB_REF_NAME"
+            "py -m mwrapper"
+            '```'
+          )
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          [System.IO.File]::WriteAllLines((Join-Path $PWD "release_notes.md"), $notes, $utf8NoBom)
 
       - name: Create GitHub Release
         shell: pwsh
