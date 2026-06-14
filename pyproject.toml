@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mwrapper"
-version = "0.1.0"
+version = "0.1.1"
 description = "A PySide6 GUI wrapper for MMAudio-based video-to-audio generation."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,7 @@ Issues = "https://github.com/dikmri/mWrapper/issues"
 dev = [
   "pytest>=8",
   "build>=1.2",
+  "pyinstaller>=6.11",
 ]
 setup = [
   "huggingface_hub>=0.23",

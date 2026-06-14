@@ -11,6 +11,6 @@ mWrapper does not vendor model weights, MMAudio, FFmpeg binaries, PyTorch, or ge
 | huggingface_hub | Future model download support | Apache-2.0 style license. Optional for setup flows. |
 | Google Cloud Translation API | Future Japanese-to-English translation | Governed by Google Cloud terms. |
 | FFmpeg / ffprobe | Video metadata and media processing | LGPL/GPL configuration matters. Binaries are not bundled. |
-| PyInstaller | Future Windows packaging | Packaging output is subject to bundled dependency licenses. |
+| PyInstaller | Windows executable packaging | Packaging output is subject to bundled dependency licenses. |
 
 Users are responsible for complying with all licenses and laws that apply to their local models, tools, and media.

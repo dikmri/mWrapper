@@ -31,7 +31,11 @@ jobs:
         run: python -m pytest
 
       - name: Build package
-        run: python -m build
+        run: python -m build --outdir release
+
+      - name: Build Windows exe
+        shell: pwsh
+        run: .\scripts\build_exe.ps1 -ZipName "mWrapper-${{ github.ref_name }}-windows.zip" -ReleaseDir "release"
 
       - name: Write release notes
         shell: pwsh
@@ -44,9 +48,10 @@ jobs:
             "## インストール"
             ""
             '```powershell'
-            "py -m pip install --user git+https://github.com/dikmri/mWrapper.git@$env:GITHUB_REF_NAME"
-            "py -m mwrapper"
+            'powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/dikmri/mWrapper/main/scripts/install.ps1 | iex"'
             '```'
+            ""
+            "zip を手動で展開する場合は `mWrapper-$env:GITHUB_REF_NAME-windows.zip` をダウンロードし、中の `mWrapper.exe` を起動してください。"
           )
           $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
           [System.IO.File]::WriteAllLines((Join-Path $PWD "release_notes.md"), $notes, $utf8NoBom)
@@ -56,5 +61,5 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = Get-ChildItem -LiteralPath dist | ForEach-Object { $_.FullName }
+          $files = Get-ChildItem -LiteralPath release -File | ForEach-Object { $_.FullName }
           gh release create "${{ github.ref_name }}" $files --title "mWrapper ${{ github.ref_name }}" --notes-file release_notes.md

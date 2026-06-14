@@ -8,7 +8,9 @@ env/
 
 build/
 dist/
+release/
 *.egg-info/
+*.spec
 
 error.log
 *.log

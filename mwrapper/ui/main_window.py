@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ..constants import APP_ICON_PATH, APP_NAME, SUPPORTED_VIDEO_EXTENSIONS
+from ..constants import APP_ICON_PATH, APP_NAME, APP_VERSION, SUPPORTED_VIDEO_EXTENSIONS
 from ..core.config import AppConfig, ConfigManager
 from ..core.jobs import GenerateJob, GenerateResult
 from ..services.cuda_environment import format_cuda_info, inspect_python_cuda
@@ -80,7 +80,7 @@ MAX_GENERATION_DURATION = 24 * 60 * 60.0
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"{APP_NAME} v0.1")
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         if APP_ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(APP_ICON_PATH)))
         self.setAcceptDrops(True)
