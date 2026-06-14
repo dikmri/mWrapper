@@ -167,14 +167,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("ポジティブプロンプト"))
         self.prompt_edit = QPlainTextEdit()
         self.prompt_edit.setPlaceholderText("例: breathing, bed creaks, cloth rustling, room ambience")
-        self.prompt_edit.setFixedHeight(96)
+        self.prompt_edit.setMinimumHeight(120)
+        self.prompt_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.prompt_edit.textChanged.connect(self._update_button_state)
-        layout.addWidget(self.prompt_edit)
+        layout.addWidget(self.prompt_edit, 3)
         layout.addWidget(QLabel("ネガティブプロンプト"))
         self.negative_prompt_edit = QPlainTextEdit()
         self.negative_prompt_edit.setPlaceholderText("例: music, speech, distorted audio")
-        self.negative_prompt_edit.setFixedHeight(64)
-        layout.addWidget(self.negative_prompt_edit)
+        self.negative_prompt_edit.setMinimumHeight(96)
+        self.negative_prompt_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        layout.addWidget(self.negative_prompt_edit, 2)
         return group
 
     def _build_generation_group(self) -> QGroupBox:
@@ -297,7 +299,7 @@ class MainWindow(QMainWindow):
         self.current_video_path = path
         self.current_video_info = info
         self.generated_video_path = None
-        self.preview.set_source(path)
+        self.preview.set_source(path, autoplay=True, loop=True)
         self._sync_duration_to_video(info.duration)
         self.statusBar().showMessage(f"入力動画: {path.name}")
         self._append_log(f"Loaded video: {path}")
@@ -566,7 +568,7 @@ class MainWindow(QMainWindow):
 
         self._save_ui_to_config()
         self.generated_video_path = None
-        self.preview.set_source(self.current_video_path)
+        self.preview.set_source(self.current_video_path, autoplay=True, loop=True)
         self._set_running(True)
         self.log_view.clear()
 
@@ -811,7 +813,12 @@ class MainWindow(QMainWindow):
     def _generation_finished(self, result: GenerateResult) -> None:
         if result.success and result.output_video_path is not None:
             self.generated_video_path = result.output_video_path
-            self.preview.set_source(result.output_video_path)
+            self.preview.set_source(
+                result.output_video_path,
+                autoplay=False,
+                loop=False,
+                show_first_frame=True,
+            )
             self._append_log(f"Generation completed: {result.output_video_path}")
             QMessageBox.information(
                 self,

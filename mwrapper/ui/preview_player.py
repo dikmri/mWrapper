@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -23,6 +23,9 @@ class PreviewPlayer(QWidget):
         self._player = QMediaPlayer(self)
         self._audio = QAudioOutput(self)
         self._video = QVideoWidget(self)
+        self._source_token = 0
+        self._pending_autoplay = False
+        self._pending_first_frame = False
         self._player.setAudioOutput(self._audio)
         self._player.setVideoOutput(self._video)
 
@@ -66,15 +69,35 @@ class PreviewPlayer(QWidget):
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.playbackStateChanged.connect(self._on_state_changed)
+        self._player.mediaStatusChanged.connect(self._on_media_status_changed)
 
-    def set_source(self, path: Path | None) -> None:
+    def set_source(
+        self,
+        path: Path | None,
+        *,
+        autoplay: bool = False,
+        loop: bool = False,
+        show_first_frame: bool = False,
+    ) -> None:
+        self._source_token += 1
+        token = self._source_token
+        self._pending_autoplay = autoplay
+        self._pending_first_frame = show_first_frame and not autoplay
+        self._audio.setMuted(False)
         self._player.stop()
+        self._player.setLoops(
+            QMediaPlayer.Loops.Infinite if loop else QMediaPlayer.Loops.Once
+        )
         if path is None:
+            self._pending_autoplay = False
+            self._pending_first_frame = False
             self._player.setSource(QUrl())
             self._position.setRange(0, 0)
             self._time_label.setText("00:00 / 00:00")
             return
         self._player.setSource(QUrl.fromLocalFile(str(path)))
+        if autoplay:
+            QTimer.singleShot(0, lambda: self._start_pending_playback(token))
 
     def toggle_playback(self) -> None:
         if self._player.source().isEmpty():
@@ -94,12 +117,51 @@ class PreviewPlayer(QWidget):
         self._position.setRange(0, duration)
         self._update_time_label(self._player.position(), duration)
 
+    def _on_media_status_changed(self, status: QMediaPlayer.MediaStatus) -> None:
+        if status in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+        ):
+            self._start_pending_playback(self._source_token)
+
     def _on_state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
         icon = QStyle.SP_MediaPause if state == QMediaPlayer.PlaybackState.PlayingState else QStyle.SP_MediaPlay
         self._play_button.setIcon(self.style().standardIcon(icon))
 
     def _update_time_label(self, position: int, duration: int) -> None:
         self._time_label.setText(f"{_format_ms(position)} / {_format_ms(duration)}")
+
+    def _start_pending_playback(self, token: int) -> None:
+        if token != self._source_token or self._player.source().isEmpty():
+            return
+        if self._pending_autoplay:
+            self._pending_autoplay = False
+            self._player.setPosition(0)
+            self._player.play()
+            return
+        if self._pending_first_frame:
+            if self._player.mediaStatus() not in (
+                QMediaPlayer.MediaStatus.LoadedMedia,
+                QMediaPlayer.MediaStatus.BufferedMedia,
+            ):
+                return
+            self._pending_first_frame = False
+            self._prime_first_frame(token)
+
+    def _prime_first_frame(self, token: int) -> None:
+        if token != self._source_token or self._player.source().isEmpty():
+            return
+        self._player.setPosition(0)
+        self._audio.setMuted(True)
+        self._player.play()
+        QTimer.singleShot(120, lambda: self._pause_after_prime(token))
+
+    def _pause_after_prime(self, token: int) -> None:
+        if token != self._source_token or self._player.source().isEmpty():
+            return
+        self._player.pause()
+        self._player.setPosition(0)
+        self._audio.setMuted(False)
 
 
 def _format_ms(value: int) -> str:
