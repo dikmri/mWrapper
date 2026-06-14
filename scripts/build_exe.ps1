@@ -18,26 +18,81 @@ $ZipPath = Join-Path $ReleasePath $ZipName
 New-Item -ItemType Directory -Force -Path $ReleasePath | Out-Null
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $BuildIconPath) | Out-Null
 
-Add-Type -AssemblyName System.Drawing
-$bitmap = [System.Drawing.Bitmap]::new($IconPath)
-try {
-    $icon = [System.Drawing.Icon]::FromHandle($bitmap.GetHicon())
+function Convert-PngToIco {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePng,
+        [Parameter(Mandatory = $true)][string]$DestinationIco,
+        [int[]]$Sizes = @(256, 128, 64, 48, 32, 16)
+    )
+
+    Add-Type -AssemblyName System.Drawing
+    $source = [System.Drawing.Bitmap]::new($SourcePng)
     try {
-        $stream = [System.IO.File]::Create($BuildIconPath)
+        $images = New-Object System.Collections.Generic.List[object]
+        foreach ($size in $Sizes) {
+            $bitmap = [System.Drawing.Bitmap]::new($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            $stream = [System.IO.MemoryStream]::new()
+            try {
+                $graphics.Clear([System.Drawing.Color]::Transparent)
+                $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+                $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+                $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+
+                $scale = [Math]::Min($size / $source.Width, $size / $source.Height)
+                $width = [Math]::Max(1, [int][Math]::Round($source.Width * $scale))
+                $height = [Math]::Max(1, [int][Math]::Round($source.Height * $scale))
+                $x = [int][Math]::Floor(($size - $width) / 2)
+                $y = [int][Math]::Floor(($size - $height) / 2)
+                $graphics.DrawImage($source, $x, $y, $width, $height)
+                $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+                $images.Add([pscustomobject]@{
+                    Size = $size
+                    Bytes = $stream.ToArray()
+                })
+            }
+            finally {
+                $stream.Dispose()
+                $graphics.Dispose()
+                $bitmap.Dispose()
+            }
+        }
+
+        $file = [System.IO.File]::Create($DestinationIco)
+        $writer = [System.IO.BinaryWriter]::new($file)
         try {
-            $icon.Save($stream)
+            $writer.Write([UInt16]0)
+            $writer.Write([UInt16]1)
+            $writer.Write([UInt16]$images.Count)
+            $offset = 6 + (16 * $images.Count)
+            foreach ($image in $images) {
+                $sizeByte = if ($image.Size -eq 256) { 0 } else { [byte]$image.Size }
+                $writer.Write([byte]$sizeByte)
+                $writer.Write([byte]$sizeByte)
+                $writer.Write([byte]0)
+                $writer.Write([byte]0)
+                $writer.Write([UInt16]1)
+                $writer.Write([UInt16]32)
+                $writer.Write([UInt32]$image.Bytes.Length)
+                $writer.Write([UInt32]$offset)
+                $offset += $image.Bytes.Length
+            }
+            foreach ($image in $images) {
+                $writer.Write([byte[]]$image.Bytes)
+            }
         }
         finally {
-            $stream.Dispose()
+            $writer.Dispose()
+            $file.Dispose()
         }
     }
     finally {
-        $icon.Dispose()
+        $source.Dispose()
     }
 }
-finally {
-    $bitmap.Dispose()
-}
+
+Convert-PngToIco -SourcePng $IconPath -DestinationIco $BuildIconPath
 
 python -m PyInstaller `
     --noconfirm `

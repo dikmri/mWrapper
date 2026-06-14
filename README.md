@@ -1,5 +1,9 @@
 # mWrapper
 
+<p align="center">
+  <img src="mwrapper/resources/icons/icon.png" alt="mWrapper icon" width="128">
+</p>
+
 mWrapper は、MMAudio 系モデルを使って動画に音声を生成して付与するための Windows 向け GUI ラッパーです。
 
 動画をウィンドウへドラッグアンドドロップし、ポジティブプロンプトと必要に応じてネガティブプロンプトを入力して生成できます。初回起動時にはセットアップ先フォルダを選ぶだけで、uv、MMAudio、NSFW_MMaudio、専用 venv、CUDA 版 PyTorch の導入を自動で行います。
@@ -136,8 +140,8 @@ Windows exe zip は次で作成できます。
 `v*` タグを GitHub に push すると、GitHub Actions がテスト、Python package、Windows exe zip のビルド、GitHub Release の作成を行います。
 
 ```powershell
-git tag v0.1.9
-git push origin v0.1.9
+git tag v0.1.10
+git push origin v0.1.10
 ```
 
 Release には次のファイルが添付されます。
