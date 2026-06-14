@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mwrapper"
+version = "0.1.0"
+description = "A PySide6 GUI wrapper for MMAudio-based video-to-audio generation."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "mWrapper contributors" }]
+dependencies = [
+  "PySide6>=6.7",
+  "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+setup = [
+  "huggingface_hub>=0.23",
+  "python-dotenv>=1.0",
+]
+
+[project.scripts]
+mwrapper = "mwrapper.main:main"
+
+[tool.setuptools.packages.find]
+include = ["mwrapper*"]
+
+[tool.setuptools.package-data]
+mwrapper = ["resources/icons/*.png"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
