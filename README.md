@@ -136,8 +136,8 @@ Windows exe zip は次で作成できます。
 `v*` タグを GitHub に push すると、GitHub Actions がテスト、Python package、Windows exe zip のビルド、GitHub Release の作成を行います。
 
 ```powershell
-git tag v0.1.7
-git push origin v0.1.7
+git tag v0.1.8
+git push origin v0.1.8
 ```
 
 Release には次のファイルが添付されます。

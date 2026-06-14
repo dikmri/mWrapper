@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QVideoWidget
 from PySide6.QtWidgets import (
@@ -15,14 +16,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..constants import SUPPORTED_VIDEO_EXTENSIONS
+
 
 class PreviewPlayer(QWidget):
+    file_dropped = Signal(object)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setAcceptDrops(True)
 
         self._player = QMediaPlayer(self)
         self._audio = QAudioOutput(self)
         self._video = QVideoWidget(self)
+        self._video.setAcceptDrops(True)
+        self._video.installEventFilter(self)
         self._source_token = 0
         self._pending_autoplay = False
         self._pending_first_frame = False
@@ -70,6 +78,20 @@ class PreviewPlayer(QWidget):
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.playbackStateChanged.connect(self._on_state_changed)
         self._player.mediaStatusChanged.connect(self._on_media_status_changed)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if watched is self._video:
+            if event.type() == QEvent.Type.DragEnter:
+                return self._handle_drag_enter(event)
+            if event.type() == QEvent.Type.Drop:
+                return self._handle_drop(event)
+        return super().eventFilter(watched, event)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        self._handle_drag_enter(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        self._handle_drop(event)
 
     def set_source(
         self,
@@ -163,6 +185,22 @@ class PreviewPlayer(QWidget):
         self._player.setPosition(0)
         self._audio.setMuted(False)
 
+    def _handle_drag_enter(self, event: QEvent) -> bool:
+        if _supported_video_from_event(event) is None:
+            event.ignore()
+            return False
+        event.acceptProposedAction()
+        return True
+
+    def _handle_drop(self, event: QEvent) -> bool:
+        path = _supported_video_from_event(event)
+        if path is None:
+            event.ignore()
+            return False
+        event.acceptProposedAction()
+        self.file_dropped.emit(path)
+        return True
+
 
 def _format_ms(value: int) -> str:
     seconds = max(0, value // 1000)
@@ -171,3 +209,16 @@ def _format_ms(value: int) -> str:
     if hours:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:02d}:{seconds:02d}"
+
+
+def _supported_video_from_event(event: QEvent) -> Path | None:
+    mime_data = event.mimeData() if hasattr(event, "mimeData") else None
+    if mime_data is None or not mime_data.hasUrls():
+        return None
+    for url in mime_data.urls():
+        if not url.isLocalFile():
+            continue
+        path = Path(url.toLocalFile())
+        if path.is_file() and path.suffix.lower() in SUPPORTED_VIDEO_EXTENSIONS:
+            return path
+    return None

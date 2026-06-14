@@ -118,7 +118,17 @@ class MainWindow(QMainWindow):
         content_splitter = QSplitter(Qt.Orientation.Horizontal)
         preview_group = QGroupBox("プレビュー")
         preview_layout = QVBoxLayout(preview_group)
+
+        preview_toolbar = QHBoxLayout()
+        self.open_video_button = QPushButton("動画を読み込む")
+        self.open_video_button.setIcon(self.style().standardIcon(QStyle.SP_DialogOpenButton))
+        self.open_video_button.clicked.connect(self._choose_video)
+        preview_toolbar.addStretch(1)
+        preview_toolbar.addWidget(self.open_video_button)
+        preview_layout.addLayout(preview_toolbar)
+
         self.preview = PreviewPlayer()
+        self.preview.file_dropped.connect(self.load_video)
         preview_layout.addWidget(self.preview)
         preview_group.setMinimumWidth(640)
 
@@ -900,6 +910,7 @@ class MainWindow(QMainWindow):
         self.save_button.setEnabled(has_result and not busy)
         self.open_save_dir_button.setEnabled(not busy)
         self.reset_environment_button.setEnabled(not busy)
+        self.open_video_button.setEnabled(not busy)
 
     def _sync_duration_to_video(self, duration: float | None) -> None:
         if duration is None or duration <= 0:
