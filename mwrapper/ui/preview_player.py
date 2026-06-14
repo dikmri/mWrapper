@@ -2,10 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
-from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
-from PySide6.QtMultimediaWidgets import QVideoWidget
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage, QPainter, QPaintEvent
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoFrame, QVideoSink
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -28,14 +27,13 @@ class PreviewPlayer(QWidget):
 
         self._player = QMediaPlayer(self)
         self._audio = QAudioOutput(self)
-        self._video = QVideoWidget(self)
-        self._video.setAcceptDrops(True)
-        self._video.installEventFilter(self)
+        self._video = _VideoCanvas(self)
+        self._video.file_dropped.connect(self.file_dropped)
         self._source_token = 0
         self._pending_autoplay = False
         self._pending_first_frame = False
         self._player.setAudioOutput(self._audio)
-        self._player.setVideoOutput(self._video)
+        self._player.setVideoOutput(self._video.video_sink)
 
         self._play_button = QPushButton()
         self._play_button.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
@@ -79,14 +77,6 @@ class PreviewPlayer(QWidget):
         self._player.playbackStateChanged.connect(self._on_state_changed)
         self._player.mediaStatusChanged.connect(self._on_media_status_changed)
 
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
-        if watched is self._video:
-            if event.type() == QEvent.Type.DragEnter:
-                return self._handle_drag_enter(event)
-            if event.type() == QEvent.Type.Drop:
-                return self._handle_drop(event)
-        return super().eventFilter(watched, event)
-
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
         self._handle_drag_enter(event)
 
@@ -113,10 +103,12 @@ class PreviewPlayer(QWidget):
         if path is None:
             self._pending_autoplay = False
             self._pending_first_frame = False
+            self._video.clear()
             self._player.setSource(QUrl())
             self._position.setRange(0, 0)
             self._time_label.setText("00:00 / 00:00")
             return
+        self._video.clear()
         self._player.setSource(QUrl.fromLocalFile(str(path)))
         if autoplay:
             QTimer.singleShot(0, lambda: self._start_pending_playback(token))
@@ -200,6 +192,62 @@ class PreviewPlayer(QWidget):
         event.acceptProposedAction()
         self.file_dropped.emit(path)
         return True
+
+
+class _VideoCanvas(QWidget):
+    file_dropped = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self.setMinimumHeight(240)
+        self.setAutoFillBackground(False)
+        self.video_sink = QVideoSink(self)
+        self._image = QImage()
+        self.video_sink.videoFrameChanged.connect(self._on_video_frame_changed)
+
+    def clear(self) -> None:
+        self._image = QImage()
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), Qt.GlobalColor.black)
+        if self._image.isNull():
+            return
+        target = self._target_rect(self._image)
+        painter.drawImage(target, self._image)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        if _supported_video_from_event(event) is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        path = _supported_video_from_event(event)
+        if path is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.file_dropped.emit(path)
+
+    def _on_video_frame_changed(self, frame: QVideoFrame) -> None:
+        if not frame.isValid():
+            return
+        image = frame.toImage()
+        if image.isNull():
+            return
+        self._image = image
+        self.update()
+
+    def _target_rect(self, image: QImage) -> QRect:
+        size = image.size()
+        size.scale(self.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        x = (self.width() - size.width()) // 2
+        y = (self.height() - size.height()) // 2
+        return QRect(QPoint(x, y), size)
 
 
 def _format_ms(value: int) -> str:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 APP_NAME = "mWrapper"
-APP_VERSION = "0.1.8"
+APP_VERSION = "0.1.9"
 PACKAGE_DIR = Path(__file__).resolve().parent
 APP_ICON_PATH = PACKAGE_DIR / "resources" / "icons" / "icon.png"
 
