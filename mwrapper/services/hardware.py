@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 
@@ -18,6 +19,18 @@ class HardwareInfo:
 
 
 def inspect_hardware(timeout_seconds: int = 10) -> HardwareInfo:
+    nvidia_smi_info = _inspect_with_nvidia_smi(timeout_seconds)
+    if nvidia_smi_info.has_nvidia_gpu:
+        return nvidia_smi_info
+
+    windows_info = _inspect_with_windows_video_controller(timeout_seconds)
+    if windows_info.has_nvidia_gpu:
+        return windows_info
+
+    return nvidia_smi_info
+
+
+def _inspect_with_nvidia_smi(timeout_seconds: int) -> HardwareInfo:
     try:
         completed = subprocess.run(
             [
@@ -53,10 +66,54 @@ def inspect_hardware(timeout_seconds: int = 10) -> HardwareInfo:
     return HardwareInfo(nvidia_gpus=gpus, nvidia_driver=driver)
 
 
+def _inspect_with_windows_video_controller(timeout_seconds: int) -> HardwareInfo:
+    if os.name != "nt":
+        return HardwareInfo()
+
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "Get-CimInstance Win32_VideoController | "
+        "ForEach-Object { \"$($_.Name),$($_.DriverVersion)\" }",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout_seconds,
+            check=False,
+            shell=False,
+            **hidden_subprocess_kwargs(),
+        )
+    except Exception as exc:
+        return HardwareInfo(error=str(exc))
+
+    if completed.returncode != 0:
+        return HardwareInfo(error=completed.stderr.strip() or completed.stdout.strip())
+
+    gpus: list[str] = []
+    driver = ""
+    for line in completed.stdout.splitlines():
+        name, _, raw_driver = line.partition(",")
+        name = name.strip()
+        if not name or "nvidia" not in name.lower():
+            continue
+        gpus.append(name)
+        if raw_driver.strip():
+            driver = raw_driver.strip()
+    return HardwareInfo(nvidia_gpus=gpus, nvidia_driver=driver)
+
+
 def format_hardware_info(info: HardwareInfo) -> str:
-    if info.error:
-        return f"ハードウェア確認: NVIDIA GPUを検出できませんでした / 詳細: {info.error}"
     if not info.nvidia_gpus:
+        if info.error:
+            return f"ハードウェア確認: NVIDIA GPUを検出できませんでした / 詳細: {info.error}"
         return "ハードウェア確認: NVIDIA GPUなし"
     gpus = ", ".join(info.nvidia_gpus)
     driver = info.nvidia_driver or "不明"

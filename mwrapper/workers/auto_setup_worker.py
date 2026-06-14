@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -10,9 +9,14 @@ from PySide6.QtCore import QThread, Signal
 from ..services.hardware import format_hardware_info, inspect_hardware
 from ..services.mmaudio_downloader import download_mmaudio_repository
 from ..services.model_assets import download_nsfw_mmaudio_model
-from ..services.package_installer import PyTorchInstallSpec, select_pytorch_install_spec
+from ..services.package_installer import (
+    PyTorchInstallSpec,
+    build_mmaudio_venv_commands,
+    build_uv_bootstrap_commands,
+    find_uv,
+    select_pytorch_install_spec,
+)
 from ..services.subprocess_utils import hidden_subprocess_kwargs
-from .mmaudio_env_setup_worker import MMAudioEnvSetupWorker
 
 
 class AutoSetupWorker(QThread):
@@ -92,16 +96,21 @@ class AutoSetupWorker(QThread):
         mmaudio_dir: Path,
         pytorch_spec: PyTorchInstallSpec,
     ) -> int:
-        builder = MMAudioEnvSetupWorker(base_python, self.venv_dir, mmaudio_dir, pytorch_spec)
         venv_python = self.venv_dir / "Scripts" / "python.exe"
-        uv_path = shutil.which("uv")
-        commands = builder._uv_commands(uv_path, venv_python) if uv_path else builder._pip_commands(venv_python)
-        self.log.emit(
-            "uvを使ってMMAudio専用venvを構築します。"
-            if uv_path
-            else "uvが見つからないため、python -m venv と pip にフォールバックします。"
-        )
         self.venv_dir.parent.mkdir(parents=True, exist_ok=True)
+        uv_path, return_code = self._ensure_uv(base_python)
+        if return_code != 0 or uv_path is None:
+            return return_code or 1
+
+        self.log.emit("uvを使ってMMAudio専用venvを構築します。")
+        commands = build_mmaudio_venv_commands(
+            uv_path=uv_path,
+            base_python=base_python,
+            venv_dir=self.venv_dir,
+            venv_python=venv_python,
+            mmaudio_dir=mmaudio_dir,
+            pytorch_spec=pytorch_spec,
+        )
         for command, cwd in commands:
             if self._cancelled:
                 return 1
@@ -109,6 +118,28 @@ class AutoSetupWorker(QThread):
             if return_code != 0:
                 return return_code
         return 0
+
+    def _ensure_uv(self, base_python: Path) -> tuple[str | None, int]:
+        uv_path = find_uv(self.venv_dir.parent)
+        if uv_path:
+            self.log.emit(f"uv確認: 利用可能 / {uv_path}")
+            return uv_path, 0
+
+        self.log.emit("uv確認: 見つからないため、セットアップ先にuvを導入します。")
+        for command, cwd in build_uv_bootstrap_commands(base_python, self.venv_dir.parent):
+            if self._cancelled:
+                return None, 1
+            return_code = self._run_command(command, cwd)
+            if return_code != 0:
+                self.log.emit(f"uv導入に失敗しました。終了コード: {return_code}")
+                return None, return_code
+
+        uv_path = find_uv(self.venv_dir.parent)
+        if not uv_path:
+            self.log.emit("uv導入後の実行ファイルを確認できませんでした。")
+            return None, 1
+        self.log.emit(f"uv導入完了: {uv_path}")
+        return uv_path, 0
 
     def _run_command(self, command: list[str], cwd: Path | None) -> int:
         self.log.emit(subprocess.list2cmdline(command))

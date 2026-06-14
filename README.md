@@ -2,7 +2,7 @@
 
 mWrapper は、MMAudio 系モデルを使って動画に音声を生成して付与するための Windows 向け GUI ラッパーです。
 
-動画をウィンドウへドラッグアンドドロップし、ポジティブプロンプトと必要に応じてネガティブプロンプトを入力して生成できます。初回起動時にはセットアップ先フォルダを選ぶだけで、MMAudio、NSFW_MMaudio、専用 venv、CUDA 版 PyTorch の導入を自動で行います。
+動画をウィンドウへドラッグアンドドロップし、ポジティブプロンプトと必要に応じてネガティブプロンプトを入力して生成できます。初回起動時にはセットアップ先フォルダを選ぶだけで、uv、MMAudio、NSFW_MMaudio、専用 venv、CUDA 版 PyTorch の導入を自動で行います。
 
 ## 注意
 
@@ -63,13 +63,16 @@ $env:MWRAPPER_DISABLE_AUTO_UPDATE = "1"
 
 - MMAudio 本体
 - NSFW_MMaudio の重み
+- ローカル uv
 - MMAudio 専用 venv
 - CUDA 版 PyTorch
 - Hugging Face などの実行時キャッシュ
 
-必要容量を見積もり、空き容量が足りないドライブは選択できないようにしています。環境にもよりますが、初回構築にはおおむね 20 GB 前後の空き容量が必要です。
+環境にもよりますが、初回構築にはおおむね 20 GB 前後の空き容量が必要です。
 
 セットアップ済みの環境は再利用されます。起動するたびに毎回インストールし直すことはありません。環境が壊れた場合や、別のドライブへ作り直したい場合だけ、画面上の `初期化` ボタンを押してください。
+
+初回セットアップでは `uv` を必ず使います。システムに `uv` がない場合は、選択したセットアップ先の `venvs\_uv` に自動導入します。MMAudio の依存導入後、最後に選択した PyTorch 構成を再導入するため、NVIDIA GPU 検出時は CPU 版 PyTorch で終わらないようにしています。
 
 ## 使い方
 
@@ -89,7 +92,7 @@ $env:MWRAPPER_DISABLE_AUTO_UPDATE = "1"
 
 ## GPU / CUDA
 
-NVIDIA GPU がある場合、初回セットアップ時に `nvidia-smi` でハードウェア情報を確認し、PyTorch の CUDA wheel を自動選択します。RTX 50 系など新しい GPU では古い CUDA 11.8 wheel が実行時に失敗することがあるため、mWrapper は CUDA 12.8 の PyTorch を優先します。
+NVIDIA GPU がある場合、初回セットアップ時に `nvidia-smi` と Windows の GPU 情報でハードウェアを確認し、PyTorch の CUDA wheel を自動選択します。RTX 50 系など新しい GPU では古い CUDA 11.8 wheel が実行時に失敗することがあるため、mWrapper は CUDA 12.8 の PyTorch を優先します。
 
 NVIDIA GPU がない場合は CPU 構成を選びます。ただし MMAudio の生成は重いため、実用上は CUDA 対応 GPU を推奨します。
 
@@ -133,8 +136,8 @@ Windows exe zip は次で作成できます。
 `v*` タグを GitHub に push すると、GitHub Actions がテスト、Python package、Windows exe zip のビルド、GitHub Release の作成を行います。
 
 ```powershell
-git tag v0.1.3
-git push origin v0.1.3
+git tag v0.1.4
+git push origin v0.1.4
 ```
 
 Release には次のファイルが添付されます。

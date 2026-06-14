@@ -39,6 +39,7 @@ from ..core.config import AppConfig, ConfigManager
 from ..core.jobs import GenerateJob, GenerateResult
 from ..services.cuda_environment import format_cuda_info, inspect_python_cuda
 from ..services.ffmpeg import FFprobeError, VideoInfo, find_tool
+from ..services.hardware import inspect_hardware
 from ..services.log_formatter import format_log_line
 from ..services.mmaudio_dependencies import (
     format_mmaudio_dependency_info,
@@ -56,6 +57,7 @@ from ..services.package_installer import (
     PYTORCH_CUDA_LABEL,
     build_cuda_torch_install_command,
     build_mmaudio_dependency_repair_command,
+    find_uv,
 )
 from ..services.python_env import choose_mmaudio_base_python
 from ..services.setup_storage import (
@@ -65,6 +67,7 @@ from ..services.setup_storage import (
     inspect_setup_readiness,
     setup_paths_for_root,
 )
+from ..services.setup_chime import play_setup_complete_chime
 from ..services.video_service import UnsupportedVideoError, VideoService
 from ..workers.auto_setup_worker import AutoSetupWorker
 from ..workers.command_worker import CommandWorker
@@ -376,8 +379,27 @@ class MainWindow(QMainWindow):
             if changed:
                 self._save_ui_to_config()
             self._append_log("自動セットアップ確認: 専用環境は準備済みです。")
-            self._check_cuda_environment(show_message=False)
-            self._check_mmaudio_dependencies(show_message=False)
+            cuda_ok = self._check_cuda_environment(show_message=False)
+            dependencies_ok = self._check_mmaudio_dependencies(show_message=False)
+            hardware = inspect_hardware()
+            if self.config.generation.require_cuda and hardware.has_nvidia_gpu and not cuda_ok:
+                base_python = choose_mmaudio_base_python()
+                if base_python is None:
+                    self._append_log("CUDA自動修復を開始できません: Python 3.10-3.12 が見つかりません。")
+                    return
+                self._append_log(
+                    "CUDA対応PyTorchではないため、MMAudio専用Python環境を自動で再構築します。"
+                )
+                self._start_auto_setup(setup_paths, base_python.path, True)
+                return
+            if not dependencies_ok:
+                base_python = choose_mmaudio_base_python()
+                if base_python is None:
+                    self._append_log("依存関係の自動修復を開始できません: Python 3.10-3.12 が見つかりません。")
+                    return
+                self._append_log("MMAudio依存関係に問題があるため、専用Python環境を自動で再構築します。")
+                self._start_auto_setup(setup_paths, base_python.path, True)
+                return
             return
 
         base_python = None if venv_ready else choose_mmaudio_base_python()
@@ -446,7 +468,7 @@ class MainWindow(QMainWindow):
             self,
             "初回セットアップ先",
             "MMAudio、NSFW_MMaudio、専用Python環境を構築するフォルダを選択してください。\n"
-            "必要容量は選択先の既存ファイル状況から見積もり、空き容量が足りない場所は使用できません。",
+            "20GBほどの空き容量が必要です。",
         )
         while True:
             directory = QFileDialog.getExistingDirectory(
@@ -632,13 +654,14 @@ class MainWindow(QMainWindow):
 
         self._save_ui_to_config()
         python_executable = self.config.mmaudio.python_executable or "python"
-        command = build_cuda_torch_install_command(python_executable)
+        uv_path = find_uv(Path(self.config.paths.venvs_dir))
+        command = build_cuda_torch_install_command(python_executable, uv_path=uv_path)
         answer = QMessageBox.question(
             self,
             "CUDA PyTorch導入",
             f"選択中のMMAudio Python環境に{PYTORCH_CUDA_LABEL}版PyTorchを導入します。\n"
             "既存のtorch/torchvision/torchaudioは再インストールされます。\n\n"
-            "uvが利用できる場合はuvで導入するため、pipが無いvenvでも実行できます。\n"
+            "uvで導入します。初回セットアップ済み環境ではローカルuvを使用します。\n"
             "グローバルPythonを選んでいる場合はその環境を変更します。\n"
             "通常は先に「専用venv作成」を使うことを推奨します。\n\n"
             f"Python: {python_executable}\n\n"
@@ -672,13 +695,14 @@ class MainWindow(QMainWindow):
             self._show_error("MMAudio依存修復エラー", "MMAudio の demo.py を先に指定してください。")
             return
 
-        command = build_mmaudio_dependency_repair_command(python_executable)
+        uv_path = find_uv(Path(self.config.paths.venvs_dir))
+        command = build_mmaudio_dependency_repair_command(python_executable, uv_path=uv_path)
         answer = QMessageBox.question(
             self,
             "MMAudio依存修復",
             "選択中のMMAudio Python環境で依存関係を修復します。\n"
             "MMAudioをeditable installし、NumPyをMMAudio互換の <2.1 に調整します。\n\n"
-            "uvが利用できる場合はuvで導入するため、pipが無いvenvでも実行できます。\n"
+            "uvで導入します。初回セットアップ済み環境ではローカルuvを使用します。\n"
             "グローバルPythonを選んでいる場合はその環境を変更します。\n"
             "通常は先に「専用venv作成」を使うことを推奨します。\n\n"
             f"Python: {python_executable}\n"
@@ -730,7 +754,7 @@ class MainWindow(QMainWindow):
             self,
             "MMAudio専用venv作成",
             "MMAudio専用の仮想環境を作成し、CUDA版PyTorchとMMAudio依存関係を導入します。\n"
-            "uvが利用できる場合はuvを使い、なければvenv+pipにフォールバックします。\n"
+            "uvがない場合はセットアップ先にuvを導入してから構築します。\n"
             "既存の専用venvがある場合はクリアして作り直します。\n"
             "他のPython環境を汚さないため、この方法を推奨します。\n\n"
             f"Base Python: {base_python.path}\n"
@@ -1029,6 +1053,7 @@ class MainWindow(QMainWindow):
             self.mmaudio_output_edit.setText(str(demo.parent / "output"))
             self._save_ui_to_config()
             self._append_log("初回自動セットアップが完了しました。")
+            play_setup_complete_chime()
             self._check_cuda_environment(show_message=False)
             self._check_mmaudio_dependencies(show_message=False)
             return

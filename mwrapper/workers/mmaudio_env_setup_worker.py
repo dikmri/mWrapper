@@ -2,15 +2,15 @@ from __future__ import annotations
 
 import subprocess
 import threading
-import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal
 
 from ..services.package_installer import (
-    MMAUDIO_NUMPY_SPEC,
-    MMAUDIO_SOUNDFILE_SPEC,
     PyTorchInstallSpec,
+    build_mmaudio_venv_commands,
+    build_uv_bootstrap_commands,
+    find_uv,
     select_pytorch_install_spec,
 )
 from ..services.subprocess_utils import hidden_subprocess_kwargs
@@ -38,20 +38,18 @@ class MMAudioEnvSetupWorker(QThread):
 
     def run(self) -> None:
         venv_python = self.venv_dir / "Scripts" / "python.exe"
-        uv_path = shutil.which("uv")
-        commands = self._uv_commands(uv_path, venv_python) if uv_path else self._pip_commands(venv_python)
-        self.log.emit(
-            f"PyTorch構成: {self.pytorch_spec.label} / index: {self.pytorch_spec.index_url}"
-        )
-        self.log.emit(
-            "uvを使ってMMAudio専用venvを構築します。"
-            if uv_path
-            else "uvが見つからないため、python -m venv と pip にフォールバックします。"
-        )
-
         return_code = 0
         try:
             self.venv_dir.parent.mkdir(parents=True, exist_ok=True)
+            uv_path, return_code = self._ensure_uv()
+            if return_code != 0 or uv_path is None:
+                self.finished_setup.emit(return_code or 1, None)
+                return
+            commands = self._uv_commands(uv_path, venv_python)
+            self.log.emit(
+                f"PyTorch構成: {self.pytorch_spec.label} / index: {self.pytorch_spec.index_url}"
+            )
+            self.log.emit("uvを使ってMMAudio専用venvを構築します。")
             for command, cwd in commands:
                 return_code = self._run_command(command, cwd)
                 if return_code != 0:
@@ -66,92 +64,34 @@ class MMAudioEnvSetupWorker(QThread):
         self.finished_setup.emit(return_code, venv_python if return_code == 0 else None)
 
     def _uv_commands(self, uv_path: str, venv_python: Path) -> list[tuple[list[str], Path | None]]:
-        return [
-            (
-                [
-                    uv_path,
-                    "venv",
-                    "--no-cache",
-                    "--python",
-                    str(self.base_python),
-                    "--clear",
-                    "--seed",
-                    str(self.venv_dir),
-                ],
-                None,
-            ),
-            (
-                [
-                    uv_path,
-                    "pip",
-                    "install",
-                    "--no-cache",
-                    "--python",
-                    str(venv_python),
-                    "--reinstall",
-                    "torch",
-                    "torchvision",
-                    "torchaudio",
-                    "--index-url",
-                    self.pytorch_spec.index_url,
-                ],
-                None,
-            ),
-            (
-                [
-                    uv_path,
-                    "pip",
-                    "install",
-                    "--no-cache",
-                    "--python",
-                    str(venv_python),
-                    "--upgrade",
-                    "-e",
-                    ".",
-                    MMAUDIO_NUMPY_SPEC,
-                    MMAUDIO_SOUNDFILE_SPEC,
-                ],
-                self.mmaudio_dir,
-            ),
-        ]
+        return build_mmaudio_venv_commands(
+            uv_path=uv_path,
+            base_python=self.base_python,
+            venv_dir=self.venv_dir,
+            venv_python=venv_python,
+            mmaudio_dir=self.mmaudio_dir,
+            pytorch_spec=self.pytorch_spec,
+        )
 
-    def _pip_commands(self, venv_python: Path) -> list[tuple[list[str], Path | None]]:
-        return [
-            ([str(self.base_python), "-m", "venv", "--clear", str(self.venv_dir)], None),
-            ([str(venv_python), "-m", "pip", "install", "--no-cache-dir", "--upgrade", "pip"], None),
-            (
-                [
-                    str(venv_python),
-                    "-m",
-                    "pip",
-                    "install",
-                    "--no-cache-dir",
-                    "--upgrade",
-                    "--force-reinstall",
-                    "torch",
-                    "torchvision",
-                    "torchaudio",
-                    "--index-url",
-                    self.pytorch_spec.index_url,
-                ],
-                None,
-            ),
-            (
-                [
-                    str(venv_python),
-                    "-m",
-                    "pip",
-                    "install",
-                    "--no-cache-dir",
-                    "--upgrade",
-                    "-e",
-                    ".",
-                    MMAUDIO_NUMPY_SPEC,
-                    MMAUDIO_SOUNDFILE_SPEC,
-                ],
-                self.mmaudio_dir,
-            ),
-        ]
+    def _ensure_uv(self) -> tuple[str | None, int]:
+        uv_path = find_uv(self.venv_dir.parent)
+        if uv_path:
+            self.log.emit(f"uv確認: 利用可能 / {uv_path}")
+            return uv_path, 0
+
+        self.log.emit("uv確認: 見つからないため、セットアップ先にuvを導入します。")
+        for command, cwd in build_uv_bootstrap_commands(self.base_python, self.venv_dir.parent):
+            return_code = self._run_command(command, cwd)
+            if return_code != 0:
+                self.log.emit(f"uv導入に失敗しました。終了コード: {return_code}")
+                return None, return_code
+
+        uv_path = find_uv(self.venv_dir.parent)
+        if not uv_path:
+            self.log.emit("uv導入後の実行ファイルを確認できませんでした。")
+            return None, 1
+        self.log.emit(f"uv導入完了: {uv_path}")
+        return uv_path, 0
 
     def cancel(self) -> None:
         with self._lock:
